@@ -17,6 +17,7 @@ export type Progress = {
  * Checks if the terminal supports OSC 9;4 progress reporting.
  * Supported terminals:
  * - ConEmu (Windows) - all versions
+ * - VS Code 1.88+ - 集成终端 tab 上显示进度环
  * - Ghostty 1.2.0+
  * - iTerm2 3.6.6+
  *
@@ -46,6 +47,14 @@ export function isProgressReportingAvailable(): boolean {
   const version = coerce(process.env.TERM_PROGRAM_VERSION)
   if (!version) {
     return false
+  }
+
+  // VS Code 1.88+ supports OSC 9;4 for progress — 在集成终端 tab 上显示
+  // 进度环(配合内置的 ${progress} tab 变量)。这是 VSCode 里唯一能体现
+  // "正在工作"的原生序列(OSC 21337 不支持,OSC 0 标题默认也不显示)。
+  // https://code.visualstudio.com/updates/v1_88
+  if (process.env.TERM_PROGRAM === 'vscode') {
+    return gte(version.version, '1.88.0')
   }
 
   // Ghostty 1.2.0+ supports OSC 9;4 for progress
