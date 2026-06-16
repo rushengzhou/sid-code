@@ -456,16 +456,17 @@ export const CLEAR_TAB_STATUS = osc(
 )
 
 /**
- * Gate for emitting OSC 21337 (tab-status indicator). Ant-only while the
- * spec is unstable. Terminals that don't recognize it discard silently, so
- * emission is safe unconditionally — we don't gate on terminal detection
- * since support is expected across several terminals.
+ * Gate for emitting OSC 21337 (tab-status indicator). Terminals that don't
+ * recognize the sequence discard it silently, so emission is safe to enable
+ * unconditionally — we don't gate on terminal detection since support spans
+ * several terminals (iTerm2, etc.). Default on; set SID_DISABLE_TAB_STATUS
+ * to opt out (e.g. a terminal that mis-renders the sequence).
  *
  * Callers must wrap output with wrapForMultiplexer() so tmux/screen
  * DCS-passthrough carries the sequence to the outer terminal.
  */
 export function supportsTabStatus(): boolean {
-  return process.env.USER_TYPE === 'ant'
+  return !process.env.SID_DISABLE_TAB_STATUS
 }
 
 /**
