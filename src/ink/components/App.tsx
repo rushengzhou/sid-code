@@ -11,7 +11,7 @@ import { TerminalFocusEvent } from '../events/terminal-focus-event.js';
 import { INITIAL_STATE, type ParsedInput, type ParsedKey, type ParsedMouse, parseMultipleKeypresses } from '../parse-keypress.js';
 import reconciler from '../reconciler.js';
 import { finishSelection, hasSelection, type SelectionState, startSelection } from '../selection.js';
-import { isXtermJs, setXtversionName, supportsExtendedKeys } from '../terminal.js';
+import { isXtermJs, setXtversionName, supportsExtendedKeys, shouldSuppressTerminalProbe } from '../terminal.js';
 import { getTerminalFocused, setTerminalFocused } from '../terminal-focus-state.js';
 import { TerminalQuerier, xtversion } from '../terminal-querier.js';
 import { DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, FOCUS_IN, FOCUS_OUT } from '../termio/csi.js';
@@ -250,16 +250,22 @@ export default class App extends PureComponent<Props, State> {
         // Deferred to next tick so it fires AFTER the current synchronous
         // init sequence completes — avoids interleaving with alt-screen/mouse
         // tracking enable writes that may happen in the same render cycle.
-        setImmediate(() => {
-          void Promise.all([this.querier.send(xtversion()), this.querier.flush()]).then(([r]) => {
-            if (r) {
-              setXtversionName(r.name);
-              logForDebugging(`XTVERSION: terminal identified as "${r.name}"`);
-            } else {
-              logForDebugging('XTVERSION: no reply (terminal ignored query)');
-            }
+        // 短命 Ink 实例(如 -r 会话选择器)跳过探查:它会在几百毫秒内卸载,
+        // 慢终端(VS Code xterm.js)的探查回复往往在卸载后才到,经选择器→主 TUI
+        // 交接被拆碎漏进输入框(`>|xterm.js(...)1;2c` 乱码)。主 TUI 会正常探查,
+        // 那时解析器已接线,回复被正确消费,不会拆碎。
+        if (!shouldSuppressTerminalProbe()) {
+          setImmediate(() => {
+            void Promise.all([this.querier.send(xtversion()), this.querier.flush()]).then(([r]) => {
+              if (r) {
+                setXtversionName(r.name);
+                logForDebugging(`XTVERSION: terminal identified as "${r.name}"`);
+              } else {
+                logForDebugging('XTVERSION: no reply (terminal ignored query)');
+              }
+            });
           });
-        });
+        }
       }
       this.rawModeEnabledCount++;
       return;
@@ -455,6 +461,11 @@ function processKeysInBatch(app: App, items: ParsedInput[], _unused1: undefined,
     // Terminal responses (DECRPM, DA1, OSC replies, etc.) are not user
     // input — route them to the querier to resolve pending promises.
     if (item.kind === 'response') {
+      // responseFragment: a split/truncated terminal reply flushed mid-way
+      // (heavy render blocked the event loop past the 50ms incomplete-escape
+      // timer). It's not a real answer to any query and never user input —
+      // drop it silently instead of leaking bytes into the prompt.
+      if (item.response.type === 'responseFragment') continue;
       app.querier.onResponse(item.response);
       continue;
     }

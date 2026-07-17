@@ -144,6 +144,30 @@ export function setXtversionName(name: string): void {
   if (xtversionName === undefined) xtversionName = name
 }
 
+// -- Terminal-probe suppression (avoid XTVERSION/DA1 replies leaking) --
+//
+// Short-lived Ink instances (e.g. the `-r` session picker) mount, probe the
+// terminal (XTVERSION + DA1), then unmount within a few hundred ms. On slow
+// terminals like VS Code's xterm.js the probe reply arrives AFTER unmount and
+// gets fragmented across the picker→main-TUI handoff, leaking into the input
+// box as garbage (`>|xterm.js(6.1.0-beta.288)1;2c`). A time-based stdin drain
+// can't fix this reliably — it's a race. The deterministic fix: don't let the
+// short-lived instance probe at all. The main TUI still probes with its parser
+// already wired up, so the reply is consumed correctly (never fragmented).
+let suppressTerminalProbe = false
+
+/** Suppress terminal identity probing (XTVERSION) for short-lived Ink
+ *  instances. The session picker sets this before render and clears it after
+ *  unmount so the main TUI probes normally. */
+export function setSuppressTerminalProbe(v: boolean): void {
+  suppressTerminalProbe = v
+}
+
+/** Whether App.tsx should skip the XTVERSION probe on raw-mode enable. */
+export function shouldSuppressTerminalProbe(): boolean {
+  return suppressTerminalProbe
+}
+
 /** True if running in an xterm.js-based terminal (VS Code, Cursor, Windsurf
  *  integrated terminals). Combines TERM_PROGRAM env check (fast, sync, but
  *  not forwarded over SSH) with the XTVERSION probe result (async, survives

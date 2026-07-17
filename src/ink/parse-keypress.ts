@@ -109,6 +109,12 @@ export type TerminalResponse =
   /** XTVERSION: terminal name/version string (answer to CSI > 0 q).
    *  Example values: "xterm.js(5.5.0)", "ghostty 1.2.0", "iTerm2 3.6". */
   | { type: 'xtversion'; name: string }
+  /** A fragment of a terminal response that arrived split across reads and
+   *  got flushed incomplete (e.g. a heavy render blocked the event loop past
+   *  the 50ms incomplete-escape timer, so the DCS/CSI reply was cut mid-way).
+   *  It is NOT user input — no physical key produces a DCS/OSC/CSI-private
+   *  prefix — so consumers discard it instead of leaking it into the prompt. */
+  | { type: 'responseFragment'; raw: string }
 
 /**
  * Try to recognize a sequence token as a terminal response.
@@ -120,6 +126,14 @@ export type TerminalResponse =
  * safely parsed out of the input stream at any time.
  */
 function parseTerminalResponse(s: string): TerminalResponse | null {
+  // Lone String Terminator (`\x1b\\`): the tail of a DCS/OSC reply whose body
+  // was already consumed in the previous batch, leaving the ST to arrive alone
+  // in the next read. No physical key produces ESC-backslash, so discard it as
+  // a fragment instead of leaking `\` into the prompt.
+  if (s === '\x1b\\') {
+    return { type: 'responseFragment', raw: s }
+  }
+
   // CSI-prefixed responses
   if (s.startsWith('\x1b[')) {
     let m: RegExpExecArray | null
@@ -152,23 +166,41 @@ function parseTerminalResponse(s: string): TerminalResponse | null {
       }
     }
 
+    // CSI-private response fragment: starts with `\x1b[?` or `\x1b[>` but
+    // didn't match any complete response above → it's a split/truncated
+    // reply (e.g. DA1 `\x1b[?1;2c` flushed mid-way as `\x1b[?1;2`). No
+    // physical key produces the CSI-private (`?`) or CSI-secondary (`>`)
+    // prefix, so this is never user input — mark it a fragment to discard.
+    // Plain `\x1b[` (arrow keys `\x1b[A`, etc.) is left as null → keypress.
+    if (s.startsWith('\x1b[?') || s.startsWith('\x1b[>')) {
+      return { type: 'responseFragment', raw: s }
+    }
+
     return null
   }
 
-  // OSC responses (e.g. OSC 11 ; rgb:... for bg color query)
+  // OSC responses (e.g. OSC 11 ; rgb:... for bg color query).
+  // Any `\x1b]`-prefixed sequence is an OSC — no physical key produces it,
+  // so even a split/truncated OSC reply is a fragment to discard, never input.
   if (s.startsWith('\x1b]')) {
     const m = OSC_RESPONSE_RE.exec(s)
     if (m) {
       return { type: 'osc', code: parseInt(m[1]!, 10), data: m[2]! }
     }
+    return { type: 'responseFragment', raw: s }
   }
 
-  // DCS responses (e.g. XTVERSION: DCS > | name ST)
+  // DCS responses (e.g. XTVERSION: DCS > | name ST).
+  // Any `\x1bP`-prefixed sequence is a DCS — no physical key produces it, so
+  // a split/truncated DCS reply (the classic `\x1bP>|xterm.js(...)` leak when
+  // a heavy render flushes it before the ST terminator arrives) is a fragment
+  // to discard, never input.
   if (s.startsWith('\x1bP')) {
     const m = XTVERSION_RE.exec(s)
     if (m) {
       return { type: 'xtversion', name: m[1]! }
     }
+    return { type: 'responseFragment', raw: s }
   }
 
   return null
