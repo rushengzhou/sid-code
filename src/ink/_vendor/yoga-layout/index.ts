@@ -1111,7 +1111,23 @@ function layoutNode(
     // Same-generation check covers fresh-mounted (dirty) nodes during
     // virtual scroll — the dirty chain invokes them ≥2^depth times, first
     // call writes cache, rest hit: 105k visits → ~10k for 1593-node tree.
-    if (node._cN > 0 && (sameGen || !node.isDirty_)) {
+    //
+    // MEASURE-ONLY (!performLayout) — this cache stores only w/h, never child
+    // positions, so a LAYOUT-pass hit returns early and skips STEP 5's
+    // child-positioning recursion, freezing descendants at whatever positions
+    // the previous layout pass left. The single-slot _hasL above is safe for
+    // layout passes because its inputs describe the MOST RECENT layout pass,
+    // which is also what the current positions correspond to; this multi-slot
+    // cache deliberately keeps up to 4 OLDER generations, so a hit here can
+    // match a pass whose positions have since been overwritten.
+    // Real bug this caused: terminal 60→120→50→120. On the last resize the
+    // width-120 entry (from generation 2) still matched, so the clean
+    // Footer/root subtree returned width=120 without repositioning — the
+    // justifyContent:'flex-end' row-2 child kept the left it got at width 50
+    // and stopped tracking the right edge (visibly偏左/被裁). Reproducible in
+    // pure yoga with no ink involved; see the regression test in
+    // test/ink/yoga-layout-cache-positions.test.ts.
+    if (node._cN > 0 && !performLayout && (sameGen || !node.isDirty_)) {
       const cIn = node._cIn!
       for (let i = 0; i < node._cN; i++) {
         const o = i * 8
