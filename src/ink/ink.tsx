@@ -333,14 +333,58 @@ export default class Ink {
       this.needsEraseBeforePaint = true;
     }
 
+    // Main screen: poison prevFrame so the next render does a FULL-damage
+    // paint (no blit). Symmetric with the alt-screen resetFramesForAltScreen
+    // above. On narrow the fresh yoga layout no longer reaches the columns the
+    // old frame occupied; if render() below short-circuits its commit (props
+    // unchanged — common, terminalColumns flows via context not props) then
+    // resetAfterCommit never runs and the scheduleRender() paint below is the
+    // ONLY frame — it must not blit stale cells from the old wider frame, or
+    // the footer row-2's old text would linger past the new right edge.
+    // Cheap: resize is rare, and when the commit DOES fire this just turns its
+    // (already full-width-changing) repaint into a full-damage one.
+    if (!this.altScreenActive) {
+      this.prevFrameContaminated = true;
+    }
+
+    // Recalculate yoga layout with the new dimensions FIRST, unconditionally.
+    // We can't rely on render() below to do it: when the resized tree's props
+    // are unchanged (common — terminalColumns flows via context, not props),
+    // updateContainerSync's commit can short-circuit and skip resetAfterCommit,
+    // which is the only other caller of onComputeLayout(). The result is the
+    // yoga root staying at the OLD width while viewport.width (stdout.columns)
+    // reflects the new one — the footer row-2 (justifyContent: flex-end) then
+    // right-aligns against the stale width and appears shifted left. This call
+    // is idempotent (a subsequent commit's onComputeLayout just recomputes the
+    // same layout), so running it here is always safe.
+    this.rootNode.onComputeLayout?.();
+
     // Re-render the React tree with updated props so the context value changes.
-    // React's commit phase will call onComputeLayout() to recalculate yoga layout
-    // with the new dimensions, then call onRender() to render the updated frame.
-    // We don't call scheduleRender() here because that would render before the
-    // layout is updated, causing a mismatch between viewport and content dimensions.
     if (this.currentNode !== null) {
       this.render(this.currentNode);
     }
+
+    // ...but ALSO paint a frame, unconditionally. render() above does NOT
+    // guarantee one: the same commit short-circuit (props unchanged → React
+    // skips resetAfterCommit) also skips rootNode.onRender() — the ONLY caller
+    // that turns the fresh yoga layout into a painted frame. onComputeLayout()
+    // above updates yoga but paints nothing by itself. Repro (fake-stdout
+    // driver): narrow 120→50 left renderCount=0 and zero bytes written, so the
+    // footer row-2 stayed pinned at its old [87..118] columns until an
+    // unrelated render happened to fire; widen 60→120 happened to commit
+    // (renderCount=1) so it looked fine — which is why this only showed on
+    // narrow. CC's handleResize relies on the commit ALWAYS firing to drive
+    // yoga+paint as one; we decoupled them, so we must re-drive the paint.
+    //
+    // scheduleRender (throttled queueMicrotask(onRender)) runs AFTER render()
+    // above and AFTER the onComputeLayout() above, so the frame reads the NEW
+    // width — no viewport/content mismatch (the reason the original comment
+    // warned against scheduleRender was calling it BEFORE the layout update;
+    // here the layout is already updated). It's also idempotent: if render()
+    // DID commit, its resetAfterCommit already queued a trailing render, and
+    // this call coalesces into the same throttle window — at most one extra
+    // paint of identical content. resize is rare, so the cost is negligible.
+    this.scheduleRender();
   };
   resolveExitPromise: () => void = () => {};
   rejectExitPromise: (reason?: Error) => void = () => {};
