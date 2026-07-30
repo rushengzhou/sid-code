@@ -21,6 +21,8 @@ export const DEC = {
   FOCUS_EVENTS: 1004,
   BRACKETED_PASTE: 2004,
   SYNCHRONIZED_UPDATE: 2026,
+  /** Alternate scroll mode：alt screen 下滚轮转 Up/Down 方向键（终端不支持 SGR 1006 时兜底） */
+  ALTERNATE_SCROLL: 1007,
 } as const
 
 /** Generate CSI ? N h sequence (set mode) */
@@ -47,13 +49,19 @@ export const EXIT_ALT_SCREEN = decreset(DEC.ALT_SCREEN_CLEAR)
 // Mouse tracking: 1000 reports button press/release/wheel, 1002 adds drag
 // events (button-motion), 1003 adds all-motion (no button held — for
 // hover), 1006 uses SGR format (CSI < btn;col;row M/m) instead of legacy
-// X10 bytes. Combined: wheel + click/drag for selection + hover.
+// X10 bytes. 1007 (alternate scroll) makes the wheel send Up/Down arrow
+// keys when in alt screen — the fallback for terminals that don't support
+// SGR 1006 (e.g. older macOS Terminal.app). 1000/1002/1003 take precedence
+// over 1007, so enabling it is harmless on terminals that do support 1006.
+// Combined: wheel + click/drag for selection + hover + alt-scroll fallback.
 export const ENABLE_MOUSE_TRACKING =
   decset(DEC.MOUSE_NORMAL) +
   decset(DEC.MOUSE_BUTTON) +
   decset(DEC.MOUSE_ANY) +
-  decset(DEC.MOUSE_SGR)
+  decset(DEC.MOUSE_SGR) +
+  decset(DEC.ALTERNATE_SCROLL)
 export const DISABLE_MOUSE_TRACKING =
+  decreset(DEC.ALTERNATE_SCROLL) +
   decreset(DEC.MOUSE_SGR) +
   decreset(DEC.MOUSE_ANY) +
   decreset(DEC.MOUSE_BUTTON) +
