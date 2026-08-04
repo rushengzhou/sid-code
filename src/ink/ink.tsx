@@ -181,8 +181,16 @@ export default class Ink {
     autoBind(this);
     if (this.options.patchConsole) {
       this.restoreConsole = this.patchConsole();
-      this.restoreStderr = this.patchStderr();
     }
+    // patchStderr 与 patchConsole **刻意解耦**（别再合回去）：
+    // 两者拦的是不同信道 —— patchConsole 只 hook console.* 方法，patchStderr 拦的是
+    // 绕过 console 的裸 process.stderr.write。生产唯一的 TUI 入口
+    // （src/ui/fullscreen.ts）传 patchConsole:false（有意为之，见那里的注释），
+    // 于是此前 patchStderr 被连带关闭 → 在所有交互式会话里从未生效过，
+    // 任何裸 stderr 写入都直接砸在光标处、滚掉 alt-screen、让 frontFrame 与物理终端错位。
+    // patchStderr 只做「吞掉写入 → 转进 debug 日志 → alt-screen 下强制全量重绘」，
+    // 不改变任何 console.* 语义，因此无条件生效是安全的。
+    this.restoreStderr = this.patchStderr();
     this.terminal = {
       stdout: options.stdout,
       stderr: options.stderr
@@ -1610,7 +1618,28 @@ export default class Ink {
     const con = console;
     const originals: Partial<Record<keyof Console, Console[keyof Console]>> = {};
     const toDebug = (...args: unknown[]) => logForDebugging(`console.log: ${format(...args)}`);
-    const toError = (...args: unknown[]) => logError(new Error(`console.error: ${format(...args)}`));
+    // 重入守卫（与 patchStderr 同款，别删）：_vendor/log.ts 的 logError 内部就是
+    // `console.error('[ink:error]', ...)`，而这里刚把 console.error 换成了 toError，
+    // 于是 console.error → toError → logError → console.error(已被替换) → … 无限递归。
+    // 实测（照抄本结构的最小复现）直接 `RangeError: Maximum call stack size exceeded`。
+    // 这条路径不是理论风险：root.ts:134 的 `patchConsole = true` 是**默认值**，
+    // cli.ts:677 的会话选择器 render() 不传 options 就走这个默认——即选择器在场时
+    // 任何一次 console.error 都会打爆调用栈。守卫命中时退回原始 console 方法，
+    // 保证「至少能把错误打出来」而不是把进程整死。
+    let inError = false;
+    const toError = (...args: unknown[]) => {
+      if (inError) {
+        // 递归第二层：直接用原始实现输出，跳出环。
+        (originals.error as ((...a: unknown[]) => void) | undefined)?.(...args);
+        return;
+      }
+      inError = true;
+      try {
+        logError(new Error(`console.error: ${format(...args)}`));
+      } finally {
+        inError = false;
+      }
+    };
     for (const m of CONSOLE_STDOUT_METHODS) {
       originals[m] = con[m];
       con[m] = toDebug;
