@@ -48,7 +48,11 @@ export type Props = Except<Styles, 'textWrap'> & {
 /**
  * `<Box>` is an essential Ink component to build your layout. It's like `<div style="display: flex">` in the browser.
  */
-function Box(t0) {
+// t0 是 React Compiler 编译产物里的 props 形参：编译时把解构签名
+// `function Box({ children, ... }: PropsWithChildren<Props>)` 降级成了
+// `function Box(t0)`，顺手丢掉了类型标注。这里按 sourcemap 里的原始签名补回去，
+// 否则 strict 下每个组件都是 TS7006「Parameter 't0' implicitly has an 'any' type」。
+function Box(t0: PropsWithChildren<Props>) {
   const $ = _c(42);
   let autoFocus;
   let children;
