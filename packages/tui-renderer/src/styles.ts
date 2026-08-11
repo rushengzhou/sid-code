@@ -21,9 +21,9 @@ export type {
   Ansi256Color,
   AnsiColor,
   Color,
-} from '../types/color.ts'
+} from '@sid-code/shared/types/color.ts'
 // 本文件内 TextStyles / BorderProps 等要用 Color；re-export 不产生本地绑定，故另需 import。
-import type { Color } from '../types/color.ts'
+import type { Color } from '@sid-code/shared/types/color.ts'
 
 /**
  * Structured text styling properties.
