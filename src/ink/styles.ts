@@ -12,29 +12,18 @@ import {
 } from './layout/node.js'
 import type { BorderStyle, BorderTextOptions } from './render-border.js'
 
-export type RGBColor = `rgb(${number},${number},${number})`
-export type HexColor = `#${string}`
-export type Ansi256Color = `ansi256(${number})`
-export type AnsiColor =
-  | 'ansi:black'
-  | 'ansi:red'
-  | 'ansi:green'
-  | 'ansi:yellow'
-  | 'ansi:blue'
-  | 'ansi:magenta'
-  | 'ansi:cyan'
-  | 'ansi:white'
-  | 'ansi:blackBright'
-  | 'ansi:redBright'
-  | 'ansi:greenBright'
-  | 'ansi:yellowBright'
-  | 'ansi:blueBright'
-  | 'ansi:magentaBright'
-  | 'ansi:cyanBright'
-  | 'ansi:whiteBright'
-
-/** Raw color value - not a theme key */
-export type Color = RGBColor | HexColor | Ansi256Color | AnsiColor
+// 颜色原始值类型的定义已下移到 shared（`src/types/color.ts`）：
+// `src/agent/color.ts`(core) 也要用 Color，原先由它反向导入本文件会让 core 依赖 TUI。
+// 此处 re-export 供 ink 内部与既有导入方沿用（本文件是这些类型的历史入口）。
+export type {
+  RGBColor,
+  HexColor,
+  Ansi256Color,
+  AnsiColor,
+  Color,
+} from '../types/color.ts'
+// 本文件内 TextStyles / BorderProps 等要用 Color；re-export 不产生本地绑定，故另需 import。
+import type { Color } from '../types/color.ts'
 
 /**
  * Structured text styling properties.
