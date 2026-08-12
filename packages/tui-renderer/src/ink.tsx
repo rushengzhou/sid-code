@@ -1,43 +1,112 @@
-import autoBind from 'auto-bind';
-import { closeSync, constants as fsConstants, openSync, readSync, writeSync } from 'fs';
-import noop from 'lodash-es/noop.js';
-import throttle from 'lodash-es/throttle.js';
-import React, { type ReactNode } from 'react';
-import type { FiberRoot } from 'react-reconciler';
-import { ConcurrentRoot } from 'react-reconciler/constants.js';
-import { onExit } from 'signal-exit';
-import { flushInteractionTime } from './_vendor/state.js';
-import { getYogaCounters } from './_vendor/yoga-layout/index.js';
-import { logForDebugging } from './_vendor/debug.js';
-import { logError } from './_vendor/log.js';
-import { format } from 'util';
-import { colorize } from './colorize.js';
-import App from './components/App.js';
-import type { CursorDeclaration, CursorDeclarationSetter } from './components/CursorDeclarationContext.js';
-import { FRAME_INTERVAL_MS } from './constants.js';
-import * as dom from './dom.js';
-import { KeyboardEvent } from './events/keyboard-event.js';
-import { FocusManager } from './focus.js';
-import { emptyFrame, type Frame, type FrameEvent } from './frame.js';
-import { dispatchClick, dispatchHover } from './hit-test.js';
-import instances from './instances.js';
-import { LogUpdate } from './log-update.js';
-import { nodeCache } from './node-cache.js';
-import { optimize } from './optimizer.js';
-import Output from './output.js';
-import type { ParsedKey } from './parse-keypress.js';
-import reconciler, { dispatcher, getLastCommitMs, getLastYogaMs, isDebugRepaintsEnabled, recordYogaMs, resetProfileCounters } from './reconciler.js';
-import renderNodeToOutput, { consumeFollowScroll, didLayoutShift } from './render-node-to-output.js';
-import { applyPositionedHighlight, type MatchPosition, scanPositions } from './render-to-screen.js';
-import createRenderer, { type Renderer } from './renderer.js';
-import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
-import { applySearchHighlight } from './searchHighlight.js';
-import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
-import { SYNC_OUTPUT_SUPPORTED, supportsExtendedKeys, type Terminal, writeDiffToTerminal } from './terminal.js';
-import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ERASE_SCREEN } from './termio/csi.js';
-import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
-import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
-import { TerminalWriteProvider } from './useTerminalNotification.js';
+import autoBind from "auto-bind";
+import { closeSync, constants as fsConstants, openSync, readSync, writeSync } from "fs";
+import noop from "lodash-es/noop.js";
+import throttle from "lodash-es/throttle.js";
+import React, { type ReactNode } from "react";
+import type { FiberRoot } from "react-reconciler";
+import { ConcurrentRoot } from "react-reconciler/constants.js";
+import { onExit } from "signal-exit";
+import { flushInteractionTime } from "./_vendor/state.js";
+import { getYogaCounters } from "./_vendor/yoga-layout/index.js";
+import { logForDebugging } from "./_vendor/debug.js";
+import { logError } from "./_vendor/log.js";
+import { format } from "util";
+import { colorize } from "./colorize.js";
+import App from "./components/App.js";
+import type {
+  CursorDeclaration,
+  CursorDeclarationSetter,
+} from "./components/CursorDeclarationContext.js";
+import { FRAME_INTERVAL_MS } from "./constants.js";
+import * as dom from "./dom.js";
+import { KeyboardEvent } from "./events/keyboard-event.js";
+import { FocusManager } from "./focus.js";
+import { emptyFrame, type Frame, type FrameEvent } from "./frame.js";
+import { dispatchClick, dispatchHover } from "./hit-test.js";
+import instances from "./instances.js";
+import { LogUpdate } from "./log-update.js";
+import { nodeCache } from "./node-cache.js";
+import { optimize } from "./optimizer.js";
+import Output from "./output.js";
+import type { ParsedKey } from "./parse-keypress.js";
+import reconciler, {
+  dispatcher,
+  getLastCommitMs,
+  getLastYogaMs,
+  isDebugRepaintsEnabled,
+  recordYogaMs,
+  resetProfileCounters,
+} from "./reconciler.js";
+import renderNodeToOutput, {
+  consumeFollowScroll,
+  didLayoutShift,
+} from "./render-node-to-output.js";
+import { applyPositionedHighlight, type MatchPosition, scanPositions } from "./render-to-screen.js";
+import createRenderer, { type Renderer } from "./renderer.js";
+import {
+  CellWidth,
+  CharPool,
+  cellAt,
+  createScreen,
+  HyperlinkPool,
+  isEmptyCellAt,
+  migrateScreenPools,
+  StylePool,
+} from "./screen.js";
+import { applySearchHighlight } from "./searchHighlight.js";
+import {
+  applySelectionOverlay,
+  captureScrolledRows,
+  clearSelection,
+  createSelectionState,
+  extendSelection,
+  type FocusMove,
+  findPlainTextUrlAt,
+  getSelectedText,
+  hasSelection,
+  moveFocus,
+  type SelectionState,
+  selectLineAt,
+  selectWordAt,
+  shiftAnchor,
+  shiftSelection,
+  shiftSelectionForFollow,
+  startSelection,
+  updateSelection,
+} from "./selection.js";
+import {
+  SYNC_OUTPUT_SUPPORTED,
+  supportsExtendedKeys,
+  type Terminal,
+  writeDiffToTerminal,
+} from "./terminal.js";
+import {
+  CURSOR_HOME,
+  cursorMove,
+  cursorPosition,
+  DISABLE_KITTY_KEYBOARD,
+  DISABLE_MODIFY_OTHER_KEYS,
+  ENABLE_KITTY_KEYBOARD,
+  ENABLE_MODIFY_OTHER_KEYS,
+  ERASE_SCREEN,
+} from "./termio/csi.js";
+import {
+  DBP,
+  DFE,
+  DISABLE_MOUSE_TRACKING,
+  ENABLE_MOUSE_TRACKING,
+  ENTER_ALT_SCREEN,
+  EXIT_ALT_SCREEN,
+  SHOW_CURSOR,
+} from "./termio/dec.js";
+import {
+  CLEAR_ITERM2_PROGRESS,
+  CLEAR_TAB_STATUS,
+  setClipboard,
+  supportsTabStatus,
+  wrapForMultiplexer,
+} from "./termio/osc.js";
+import { TerminalWriteProvider } from "./useTerminalNotification.js";
 
 // Alt-screen: renderer.ts sets cursor.visible = !isTTY || screen.height===0,
 // which is always false in alt-screen (TTY + content fills screen).
@@ -45,23 +114,23 @@ import { TerminalWriteProvider } from './useTerminalNotification.js';
 const ALT_SCREEN_ANCHOR_CURSOR = Object.freeze({
   x: 0,
   y: 0,
-  visible: false
+  visible: false,
 });
 const CURSOR_HOME_PATCH = Object.freeze({
-  type: 'stdout' as const,
-  content: CURSOR_HOME
+  type: "stdout" as const,
+  content: CURSOR_HOME,
 });
 const ERASE_THEN_HOME_PATCH = Object.freeze({
-  type: 'stdout' as const,
-  content: ERASE_SCREEN + CURSOR_HOME
+  type: "stdout" as const,
+  content: ERASE_SCREEN + CURSOR_HOME,
 });
 
 // Cached per-Ink-instance, invalidated on resize. frame.cursor.y for
 // alt-screen is always terminalRows - 1 (renderer.ts).
 function makeAltScreenParkPatch(terminalRows: number) {
   return Object.freeze({
-    type: 'stdout' as const,
-    content: cursorPosition(terminalRows, 1)
+    type: "stdout" as const,
+    content: cursorPosition(terminalRows, 1),
   });
 }
 export type Options = {
@@ -111,10 +180,10 @@ export default class Ink {
     visited: 0,
     measured: 0,
     cacheHits: 0,
-    live: 0
+    live: 0,
   };
   private altScreenParkPatch: Readonly<{
-    type: 'stdout';
+    type: "stdout";
     content: string;
   }>;
   // Text selection state (alt-screen only). Owned here so the overlay
@@ -123,7 +192,7 @@ export default class Ink {
   readonly selection: SelectionState = createSelectionState();
   // Search highlight query (alt-screen only). Setter below triggers
   // scheduleRender; applySearchHighlight in onRender inverts matching cells.
-  private searchHighlightQuery = '';
+  private searchHighlightQuery = "";
   // Position-based highlight. VML scans positions ONCE (via
   // scanElementSubtree, when the target message is mounted), stores them
   // message-relative, sets this for every-frame apply. rowOffset =
@@ -193,7 +262,7 @@ export default class Ink {
     this.restoreStderr = this.patchStderr();
     this.terminal = {
       stdout: options.stdout,
-      stderr: options.stderr
+      stderr: options.stderr,
     };
     this.terminalColumns = options.stdout.columns || 80;
     this.terminalRows = options.stdout.rows || 24;
@@ -201,11 +270,23 @@ export default class Ink {
     this.stylePool = new StylePool();
     this.charPool = new CharPool();
     this.hyperlinkPool = new HyperlinkPool();
-    this.frontFrame = emptyFrame(this.terminalRows, this.terminalColumns, this.stylePool, this.charPool, this.hyperlinkPool);
-    this.backFrame = emptyFrame(this.terminalRows, this.terminalColumns, this.stylePool, this.charPool, this.hyperlinkPool);
+    this.frontFrame = emptyFrame(
+      this.terminalRows,
+      this.terminalColumns,
+      this.stylePool,
+      this.charPool,
+      this.hyperlinkPool,
+    );
+    this.backFrame = emptyFrame(
+      this.terminalRows,
+      this.terminalColumns,
+      this.stylePool,
+      this.charPool,
+      this.hyperlinkPool,
+    );
     this.log = new LogUpdate({
-      isTTY: options.stdout.isTTY as boolean | undefined || false,
-      stylePool: this.stylePool
+      isTTY: (options.stdout.isTTY as boolean | undefined) || false,
+      stylePool: this.stylePool,
     });
 
     // scheduleRender is called from the reconciler's resetAfterCommit, which
@@ -220,7 +301,7 @@ export default class Ink {
     const deferredRender = (): void => queueMicrotask(this.onRender);
     this.scheduleRender = throttle(deferredRender, FRAME_INTERVAL_MS, {
       leading: true,
-      trailing: true
+      trailing: true,
     });
 
     // Ignore last render after unmounting a tree to prevent empty output before exit
@@ -228,18 +309,20 @@ export default class Ink {
 
     // Unmount when process exits
     this.unsubscribeExit = onExit(this.unmount, {
-      alwaysLast: false
+      alwaysLast: false,
     });
     if (options.stdout.isTTY) {
-      options.stdout.on('resize', this.handleResize);
-      process.on('SIGCONT', this.handleResume);
+      options.stdout.on("resize", this.handleResize);
+      process.on("SIGCONT", this.handleResume);
       this.unsubscribeTTYHandlers = () => {
-        options.stdout.off('resize', this.handleResize);
-        process.off('SIGCONT', this.handleResume);
+        options.stdout.off("resize", this.handleResize);
+        process.off("SIGCONT", this.handleResume);
       };
     }
-    this.rootNode = dom.createNode('ink-root');
-    this.focusManager = new FocusManager((target, event) => dispatcher.dispatchDiscrete(target, event));
+    this.rootNode = dom.createNode("ink-root");
+    this.focusManager = new FocusManager((target, event) =>
+      dispatcher.dispatchDiscrete(target, event),
+    );
     this.rootNode.focusManager = this.focusManager;
     this.renderer = createRenderer(this.rootNode, this.stylePool);
     this.rootNode.onRender = this.scheduleRender;
@@ -260,26 +343,33 @@ export default class Ink {
         const c = getYogaCounters();
         this.lastYogaCounters = {
           ms,
-          ...c
+          ...c,
         };
       }
     };
 
-    this.container = reconciler.createContainer(this.rootNode, ConcurrentRoot, null, false, null, 'id', noop,
-    // onUncaughtError
-    noop,
-    // onCaughtError
-    noop,
-    // onRecoverableError
-    noop // onDefaultTransitionIndicator
+    this.container = reconciler.createContainer(
+      this.rootNode,
+      ConcurrentRoot,
+      null,
+      false,
+      null,
+      "id",
+      noop,
+      // onUncaughtError
+      noop,
+      // onCaughtError
+      noop,
+      // onRecoverableError
+      noop, // onDefaultTransitionIndicator
     );
-    if (("production" as string) === 'development') {
+    if (("production" as string) === "development") {
       reconciler.injectIntoDevTools({
         bundleType: 0,
         // Reporting React DOM's version, not Ink's
         // See https://github.com/facebook/react/issues/16666#issuecomment-532639905
-        version: '16.13.1',
-        rendererPackageName: 'ink'
+        version: "16.13.1",
+        rendererPackageName: "ink",
       });
     }
   }
@@ -297,8 +387,20 @@ export default class Ink {
     }
 
     // Main screen: start fresh to prevent clobbering terminal content
-    this.frontFrame = emptyFrame(this.frontFrame.viewport.height, this.frontFrame.viewport.width, this.stylePool, this.charPool, this.hyperlinkPool);
-    this.backFrame = emptyFrame(this.backFrame.viewport.height, this.backFrame.viewport.width, this.stylePool, this.charPool, this.hyperlinkPool);
+    this.frontFrame = emptyFrame(
+      this.frontFrame.viewport.height,
+      this.frontFrame.viewport.width,
+      this.stylePool,
+      this.charPool,
+      this.hyperlinkPool,
+    );
+    this.backFrame = emptyFrame(
+      this.backFrame.viewport.height,
+      this.backFrame.viewport.width,
+      this.stylePool,
+      this.charPool,
+      this.hyperlinkPool,
+    );
     this.log.reset();
     // Physical cursor position is unknown after the shell took over during
     // suspend. Clear displayCursor so the next frame's cursor preamble
@@ -408,22 +510,24 @@ export default class Ink {
     this.pause();
     this.suspendStdin();
     this.options.stdout.write(
-    // Disable extended key reporting first — editors that don't speak
-    // CSI-u (e.g. nano) show "Unknown sequence" for every Ctrl-<key> if
-    // kitty/modifyOtherKeys stays active. exitAlternateScreen re-enables.
-    DISABLE_KITTY_KEYBOARD + DISABLE_MODIFY_OTHER_KEYS + (this.altScreenMouseTracking ? DISABLE_MOUSE_TRACKING : '') + (
-    // disable mouse (no-op if off)
-    this.altScreenActive ? '' : '\x1b[?1049h') +
-    // enter alt (already in alt if fullscreen)
-    '\x1b[?1004l' +
-    // disable focus reporting
-    '\x1b[0m' +
-    // reset attributes
-    '\x1b[?25h' +
-    // show cursor
-    '\x1b[2J' +
-    // clear screen
-    '\x1b[H' // cursor home
+      // Disable extended key reporting first — editors that don't speak
+      // CSI-u (e.g. nano) show "Unknown sequence" for every Ctrl-<key> if
+      // kitty/modifyOtherKeys stays active. exitAlternateScreen re-enables.
+      DISABLE_KITTY_KEYBOARD +
+        DISABLE_MODIFY_OTHER_KEYS +
+        (this.altScreenMouseTracking ? DISABLE_MOUSE_TRACKING : "") +
+        // disable mouse (no-op if off)
+        (this.altScreenActive ? "" : "\x1b[?1049h") +
+        // enter alt (already in alt if fullscreen)
+        "\x1b[?1004l" +
+        // disable focus reporting
+        "\x1b[0m" +
+        // reset attributes
+        "\x1b[?25h" +
+        // show cursor
+        "\x1b[2J" +
+        // clear screen
+        "\x1b[H", // cursor home
     );
   }
 
@@ -440,17 +544,18 @@ export default class Ink {
    * returns, fullscreen scroll is dead.
    */
   exitAlternateScreen(): void {
-    this.options.stdout.write((this.altScreenActive ? ENTER_ALT_SCREEN : '') +
-    // re-enter alt — vim's rmcup dropped us to main
-    '\x1b[2J' +
-    // clear screen (now alt if fullscreen)
-    '\x1b[H' + (
-    // cursor home
-    this.altScreenMouseTracking ? ENABLE_MOUSE_TRACKING : '') + (
-    // re-enable mouse (skip if CLAUDE_CODE_DISABLE_MOUSE)
-    this.altScreenActive ? '' : '\x1b[?1049l') +
-    // exit alt (non-fullscreen only)
-    '\x1b[?25l' // hide cursor (Ink manages)
+    this.options.stdout.write(
+      (this.altScreenActive ? ENTER_ALT_SCREEN : "") +
+        // re-enter alt — vim's rmcup dropped us to main
+        "\x1b[2J" +
+        // clear screen (now alt if fullscreen)
+        "\x1b[H" +
+        // cursor home
+        (this.altScreenMouseTracking ? ENABLE_MOUSE_TRACKING : "") +
+        // re-enable mouse (skip if CLAUDE_CODE_DISABLE_MOUSE)
+        (this.altScreenActive ? "" : "\x1b[?1049l") +
+        // exit alt (non-fullscreen only)
+        "\x1b[?25l", // hide cursor (Ink manages)
     );
     this.resumeStdin();
     if (this.altScreenActive) {
@@ -465,7 +570,12 @@ export default class Ink {
     // ctrl+shift+<letter> from ctrl+<letter>. Pop-before-push keeps the
     // Kitty stack balanced (a well-behaved editor restores our entry, so
     // without the pop we'd accumulate depth on each editor round-trip).
-    this.options.stdout.write('\x1b[?1004h' + (supportsExtendedKeys() ? DISABLE_KITTY_KEYBOARD + ENABLE_KITTY_KEYBOARD + ENABLE_MODIFY_OTHER_KEYS : ''));
+    this.options.stdout.write(
+      "\x1b[?1004h" +
+        (supportsExtendedKeys()
+          ? DISABLE_KITTY_KEYBOARD + ENABLE_KITTY_KEYBOARD + ENABLE_MODIFY_OTHER_KEYS
+          : ""),
+    );
   }
   onRender() {
     if (this.isUnmounted || this.isPaused) {
@@ -494,7 +604,7 @@ export default class Ink {
       terminalWidth,
       terminalRows,
       altScreen: this.altScreenActive,
-      prevFrameContaminated: this.prevFrameContaminated
+      prevFrameContaminated: this.prevFrameContaminated,
     });
     const rendererMs = performance.now() - renderStart;
 
@@ -510,19 +620,19 @@ export default class Ink {
     // mouse as the anchor walks up. After release, both ends are text-
     // anchored and move as a block.
     const follow = consumeFollowScroll();
-    if (follow && this.selection.anchor &&
-    // Only translate if the selection is ON scrollbox content. Selections
-    // in the footer/prompt/StickyPromptHeader are on static text — the
-    // scroll doesn't move what's under them. Without this guard, a
-    // footer selection would be shifted by -delta then clamped to
-    // viewportBottom, teleporting it into the scrollbox. Mirror the
-    // bounds check the deleted check() in ScrollKeybindingHandler had.
-    this.selection.anchor.row >= follow.viewportTop && this.selection.anchor.row <= follow.viewportBottom) {
-      const {
-        delta,
-        viewportTop,
-        viewportBottom
-      } = follow;
+    if (
+      follow &&
+      this.selection.anchor &&
+      // Only translate if the selection is ON scrollbox content. Selections
+      // in the footer/prompt/StickyPromptHeader are on static text — the
+      // scroll doesn't move what's under them. Without this guard, a
+      // footer selection would be shifted by -delta then clamped to
+      // viewportBottom, teleporting it into the scrollbox. Mirror the
+      // bounds check the deleted check() in ScrollKeybindingHandler had.
+      this.selection.anchor.row >= follow.viewportTop &&
+      this.selection.anchor.row <= follow.viewportBottom
+    ) {
+      const { delta, viewportTop, viewportBottom } = follow;
       // captureScrolledRows and shift* are a pair: capture grabs rows about
       // to scroll off, shift moves the selection endpoint so the same rows
       // won't intersect again next frame. Capturing without shifting leaves
@@ -532,27 +642,46 @@ export default class Ink {
       // each shift branch so the pairing can't be broken by a new guard.
       if (this.selection.isDragging) {
         if (hasSelection(this.selection)) {
-          captureScrolledRows(this.selection, this.frontFrame.screen, viewportTop, viewportTop + delta - 1, 'above');
+          captureScrolledRows(
+            this.selection,
+            this.frontFrame.screen,
+            viewportTop,
+            viewportTop + delta - 1,
+            "above",
+          );
         }
         shiftAnchor(this.selection, -delta, viewportTop, viewportBottom);
       } else if (
-      // Flag-3 guard: the anchor check above only proves ONE endpoint is
-      // on scrollbox content. A drag from row 3 (scrollbox) into the
-      // footer at row 6, then release, leaves focus outside the viewport
-      // — shiftSelectionForFollow would clamp it to viewportBottom,
-      // teleporting the highlight from static footer into the scrollbox.
-      // Symmetric check: require BOTH ends inside to translate. A
-      // straddling selection falls through to NEITHER shift NOR capture:
-      // the footer endpoint pins the selection, text scrolls away under
-      // the highlight, and getSelectedText reads the CURRENT screen
-      // contents — no accumulation. Dragging branch doesn't need this:
-      // shiftAnchor ignores focus, and the anchor DOES shift (so capture
-      // is correct there even when focus is in the footer).
-      !this.selection.focus || this.selection.focus.row >= viewportTop && this.selection.focus.row <= viewportBottom) {
+        // Flag-3 guard: the anchor check above only proves ONE endpoint is
+        // on scrollbox content. A drag from row 3 (scrollbox) into the
+        // footer at row 6, then release, leaves focus outside the viewport
+        // — shiftSelectionForFollow would clamp it to viewportBottom,
+        // teleporting the highlight from static footer into the scrollbox.
+        // Symmetric check: require BOTH ends inside to translate. A
+        // straddling selection falls through to NEITHER shift NOR capture:
+        // the footer endpoint pins the selection, text scrolls away under
+        // the highlight, and getSelectedText reads the CURRENT screen
+        // contents — no accumulation. Dragging branch doesn't need this:
+        // shiftAnchor ignores focus, and the anchor DOES shift (so capture
+        // is correct there even when focus is in the footer).
+        !this.selection.focus ||
+        (this.selection.focus.row >= viewportTop && this.selection.focus.row <= viewportBottom)
+      ) {
         if (hasSelection(this.selection)) {
-          captureScrolledRows(this.selection, this.frontFrame.screen, viewportTop, viewportTop + delta - 1, 'above');
+          captureScrolledRows(
+            this.selection,
+            this.frontFrame.screen,
+            viewportTop,
+            viewportTop + delta - 1,
+            "above",
+          );
         }
-        const cleared = shiftSelectionForFollow(this.selection, -delta, viewportTop, viewportBottom);
+        const cleared = shiftSelectionForFollow(
+          this.selection,
+          -delta,
+          viewportTop,
+          viewportBottom,
+        );
         // Auto-clear (both ends overshot minRow) must notify React-land
         // so useHasSelection re-renders and the footer copy/escape hint
         // disappears. notifySelectionChange() would recurse into onRender;
@@ -596,7 +725,13 @@ export default class Ink {
       // the message first mounted. Message-relative + rowOffset = screen.
       if (this.searchPositions) {
         const sp = this.searchPositions;
-        const posApplied = applyPositionedHighlight(frame.screen, this.stylePool, sp.positions, sp.rowOffset, sp.currentIdx);
+        const posApplied = applyPositionedHighlight(
+          frame.screen,
+          this.stylePool,
+          sp.positions,
+          sp.rowOffset,
+          sp.currentIdx,
+        );
         hlActive = hlActive || posApplied;
       }
     }
@@ -611,7 +746,7 @@ export default class Ink {
         x: 0,
         y: 0,
         width: frame.screen.width,
-        height: frame.screen.height
+        height: frame.screen.height,
       };
     }
 
@@ -629,16 +764,20 @@ export default class Ink {
     if (this.altScreenActive) {
       prevFrame = {
         ...this.frontFrame,
-        cursor: ALT_SCREEN_ANCHOR_CURSOR
+        cursor: ALT_SCREEN_ANCHOR_CURSOR,
       };
     }
     const tDiff = performance.now();
-    const diff = this.log.render(prevFrame, frame, this.altScreenActive,
-    // DECSTBM needs BSU/ESU atomicity — without it the outer terminal
-    // renders the scrolled-but-not-yet-repainted intermediate state.
-    // tmux is the main case (re-emits DECSTBM with its own timing and
-    // doesn't implement DEC 2026, so SYNC_OUTPUT_SUPPORTED is false).
-    SYNC_OUTPUT_SUPPORTED);
+    const diff = this.log.render(
+      prevFrame,
+      frame,
+      this.altScreenActive,
+      // DECSTBM needs BSU/ESU atomicity — without it the outer terminal
+      // renders the scrolled-but-not-yet-repainted intermediate state.
+      // tmux is the main case (re-emits DECSTBM with its own timing and
+      // doesn't implement DEC 2026, so SYNC_OUTPUT_SUPPORTED is false).
+      SYNC_OUTPUT_SUPPORTED,
+    );
     const diffMs = performance.now() - tDiff;
     // Swap buffers
     this.backFrame = this.frontFrame;
@@ -651,19 +790,25 @@ export default class Ink {
       this.resetPools();
       this.lastPoolResetTime = renderStart;
     }
-    const flickers: FrameEvent['flickers'] = [];
+    const flickers: FrameEvent["flickers"] = [];
     for (const patch of diff) {
-      if (patch.type === 'clearTerminal') {
+      if (patch.type === "clearTerminal") {
         flickers.push({
           desiredHeight: frame.screen.height,
           availableHeight: frame.viewport.height,
-          reason: patch.reason
+          reason: patch.reason,
         });
         if (isDebugRepaintsEnabled() && patch.debug) {
           const chain = dom.findOwnerChainAtRow(this.rootNode, patch.debug.triggerY);
-          logForDebugging(`[REPAINT] full reset · ${patch.reason} · row ${patch.debug.triggerY}\n` + `  prev: "${patch.debug.prevLine}"\n` + `  next: "${patch.debug.nextLine}"\n` + `  culprit: ${chain.length ? chain.join(' < ') : '(no owner chain captured)'}`, {
-            level: 'warn'
-          });
+          logForDebugging(
+            `[REPAINT] full reset · ${patch.reason} · row ${patch.debug.triggerY}\n` +
+              `  prev: "${patch.debug.prevLine}"\n` +
+              `  next: "${patch.debug.nextLine}"\n` +
+              `  culprit: ${chain.length ? chain.join(" < ") : "(no owner chain captured)"}`,
+            {
+              level: "warn",
+            },
+          );
         }
       }
     }
@@ -709,16 +854,20 @@ export default class Ink {
     // and no move is emitted.
     const decl = this.cursorDeclaration;
     const rect = decl !== null ? nodeCache.get(decl.node) : undefined;
-    const target = decl !== null && rect !== undefined ? {
-      x: rect.x + decl.relativeX,
-      y: rect.y + decl.relativeY
-    } : null;
+    const target =
+      decl !== null && rect !== undefined
+        ? {
+            x: rect.x + decl.relativeX,
+            y: rect.y + decl.relativeY,
+          }
+        : null;
     const parked = this.displayCursor;
 
     // Preserve the empty-diff zero-write fast path: skip all cursor writes
     // when nothing rendered AND the park target is unchanged.
-    const targetMoved = target !== null && (parked === null || parked.x !== target.x || parked.y !== target.y);
-    if (hasDiff || targetMoved || target === null && parked !== null) {
+    const targetMoved =
+      target !== null && (parked === null || parked.x !== target.x || parked.y !== target.y);
+    if (hasDiff || targetMoved || (target === null && parked !== null)) {
       // Main-screen preamble: log-update's relative moves assume the
       // physical cursor is at prevFrame.cursor. If last frame parked it
       // elsewhere, move back before the diff runs. Alt-screen's CSI H
@@ -728,8 +877,8 @@ export default class Ink {
         const pdy = prevFrame.cursor.y - parked.y;
         if (pdx !== 0 || pdy !== 0) {
           optimized.unshift({
-            type: 'stdout',
-            content: cursorMove(pdx, pdy)
+            type: "stdout",
+            content: cursorMove(pdx, pdy),
           });
         }
       }
@@ -740,23 +889,26 @@ export default class Ink {
           const row = Math.min(Math.max(target.y + 1, 1), terminalRows);
           const col = Math.min(Math.max(target.x + 1, 1), terminalWidth);
           optimized.push({
-            type: 'stdout',
-            content: cursorPosition(row, col)
+            type: "stdout",
+            content: cursorPosition(row, col),
           });
         } else {
           // After the diff (or preamble), cursor is at frame.cursor. If no
           // diff AND previously parked, it's still at the old park position
           // (log-update wrote nothing). Otherwise it's at frame.cursor.
-          const from = !hasDiff && parked !== null ? parked : {
-            x: frame.cursor.x,
-            y: frame.cursor.y
-          };
+          const from =
+            !hasDiff && parked !== null
+              ? parked
+              : {
+                  x: frame.cursor.x,
+                  y: frame.cursor.y,
+                };
           const dx = target.x - from.x;
           const dy = target.y - from.y;
           if (dx !== 0 || dy !== 0) {
             optimized.push({
-              type: 'stdout',
-              content: cursorMove(dx, dy)
+              type: "stdout",
+              content: cursorMove(dx, dy),
             });
           }
         }
@@ -774,8 +926,8 @@ export default class Ink {
           const rdy = frame.cursor.y - parked.y;
           if (rdx !== 0 || rdy !== 0) {
             optimized.push({
-              type: 'stdout',
-              content: cursorMove(rdx, rdy)
+              type: "stdout",
+              content: cursorMove(rdx, rdy),
             });
           }
         }
@@ -817,7 +969,7 @@ export default class Ink {
       visited: 0,
       measured: 0,
       cacheHits: 0,
-      live: 0
+      live: 0,
     };
     this.options.onFrame?.({
       durationMs: performance.now() - renderStart,
@@ -832,9 +984,9 @@ export default class Ink {
         yogaVisited: yc.visited,
         yogaMeasured: yc.measured,
         yogaCacheHits: yc.cacheHits,
-        yogaLive: yc.live
+        yogaLive: yc.live,
       },
-      flickers
+      flickers,
     });
   }
   pause(): void {
@@ -854,8 +1006,20 @@ export default class Ink {
    * an external process (e.g. tmux, shell, full-screen TUI).
    */
   repaint(): void {
-    this.frontFrame = emptyFrame(this.frontFrame.viewport.height, this.frontFrame.viewport.width, this.stylePool, this.charPool, this.hyperlinkPool);
-    this.backFrame = emptyFrame(this.backFrame.viewport.height, this.backFrame.viewport.width, this.stylePool, this.charPool, this.hyperlinkPool);
+    this.frontFrame = emptyFrame(
+      this.frontFrame.viewport.height,
+      this.frontFrame.viewport.width,
+      this.stylePool,
+      this.charPool,
+      this.hyperlinkPool,
+    );
+    this.backFrame = emptyFrame(
+      this.backFrame.viewport.height,
+      this.backFrame.viewport.width,
+      this.stylePool,
+      this.charPool,
+      this.hyperlinkPool,
+    );
     this.log.reset();
     // Physical cursor position is unknown after external terminal corruption.
     // Clear displayCursor so the cursor preamble doesn't emit a stale
@@ -953,7 +1117,9 @@ export default class Ink {
     // Pop-before-push keeps Kitty stack depth at 1 instead of accumulating
     // on each call.
     if (supportsExtendedKeys()) {
-      this.options.stdout.write(DISABLE_KITTY_KEYBOARD + ENABLE_KITTY_KEYBOARD + ENABLE_MODIFY_OTHER_KEYS);
+      this.options.stdout.write(
+        DISABLE_KITTY_KEYBOARD + ENABLE_KITTY_KEYBOARD + ENABLE_MODIFY_OTHER_KEYS,
+      );
     }
     if (!this.altScreenActive) return;
     // Mouse tracking — idempotent, safe to re-assert on every stdin gap.
@@ -1011,7 +1177,12 @@ export default class Ink {
    * stays true. ENTER_ALT_SCREEN is a terminal-side no-op if already in alt.
    */
   private reenterAltScreen(): void {
-    this.options.stdout.write(ENTER_ALT_SCREEN + ERASE_SCREEN + CURSOR_HOME + (this.altScreenMouseTracking ? ENABLE_MOUSE_TRACKING : ''));
+    this.options.stdout.write(
+      ENTER_ALT_SCREEN +
+        ERASE_SCREEN +
+        CURSOR_HOME +
+        (this.altScreenMouseTracking ? ENABLE_MOUSE_TRACKING : ""),
+    );
     this.resetFramesForAltScreen();
   }
 
@@ -1037,13 +1208,13 @@ export default class Ink {
       screen: createScreen(cols, rows, this.stylePool, this.charPool, this.hyperlinkPool),
       viewport: {
         width: cols,
-        height: rows + 1
+        height: rows + 1,
       },
       cursor: {
         x: 0,
         y: 0,
-        visible: true
-      }
+        visible: true,
+      },
     });
     this.frontFrame = blank();
     this.backFrame = blank();
@@ -1063,12 +1234,12 @@ export default class Ink {
    * region stays visible after the automatic copy.
    */
   copySelectionNoClear(): string {
-    if (!hasSelection(this.selection)) return '';
+    if (!hasSelection(this.selection)) return "";
     const text = getSelectedText(this.selection, this.frontFrame.screen);
     if (text) {
       // Raw OSC 52, or DCS-passthrough-wrapped OSC 52 inside tmux (tmux
       // drops it silently unless allow-passthrough is on — no regression).
-      void setClipboard(text).then(raw => {
+      void setClipboard(text).then((raw) => {
         if (raw) this.options.stdout.write(raw);
       });
     }
@@ -1080,7 +1251,7 @@ export default class Ink {
    * and clear the selection. Returns the copied text (empty if no selection).
    */
   copySelection(): string {
-    if (!hasSelection(this.selection)) return '';
+    if (!hasSelection(this.selection)) return "";
     const text = this.copySelectionNoClear();
     clearSelection(this.selection);
     this.notifySelectionChange();
@@ -1131,12 +1302,12 @@ export default class Ink {
       width,
       height,
       stylePool: this.stylePool,
-      screen
+      screen,
     });
     renderNodeToOutput(el, output, {
       offsetX: -elLeft,
       offsetY: -elTop,
-      prevScreen: undefined
+      prevScreen: undefined,
     });
     const rendered = output.get();
     // renderNodeToOutput wrote our offset positions to nodeCache —
@@ -1145,7 +1316,15 @@ export default class Ink {
     // correctly. One extra paint of this message, but correct > fast.
     dom.markDirty(el);
     const positions = scanPositions(rendered, this.searchHighlightQuery);
-    logForDebugging(`scanElementSubtree: q='${this.searchHighlightQuery}' ` + `el=${width}x${height}@(${elLeft},${elTop}) n=${positions.length} ` + `[${positions.slice(0, 10).map(p => `${p.row}:${p.col}`).join(',')}` + `${positions.length > 10 ? ',…' : ''}]`);
+    logForDebugging(
+      `scanElementSubtree: q='${this.searchHighlightQuery}' ` +
+        `el=${width}x${height}@(${elLeft},${elTop}) n=${positions.length} ` +
+        `[${positions
+          .slice(0, 10)
+          .map((p) => `${p.row}:${p.col}`)
+          .join(",")}` +
+        `${positions.length > 10 ? ",…" : ""}]`,
+    );
     return positions;
   }
 
@@ -1154,11 +1333,13 @@ export default class Ink {
    *  highlight (inverse on all matches) still runs — this overlays yellow
    *  on top. rowOffset changes as the user scrolls (= message's current
    *  screen-top); positions stay stable (message-relative). */
-  setSearchPositions(state: {
-    positions: MatchPosition[];
-    rowOffset: number;
-    currentIdx: number;
-  } | null): void {
+  setSearchPositions(
+    state: {
+      positions: MatchPosition[];
+      rowOffset: number;
+      currentIdx: number;
+    } | null,
+  ): void {
     this.searchPositions = state;
     this.scheduleRender();
   }
@@ -1181,16 +1362,16 @@ export default class Ink {
     // Wrap a NUL marker, then split on it to extract the open/close SGR.
     // colorize returns the input unchanged if the color string is bad —
     // no NUL-split then, so fall through to null (inverse fallback).
-    const wrapped = colorize('\0', color, 'background');
-    const nul = wrapped.indexOf('\0');
+    const wrapped = colorize("\0", color, "background");
+    const nul = wrapped.indexOf("\0");
     if (nul <= 0 || nul === wrapped.length - 1) {
       this.stylePool.setSelectionBg(null);
       return;
     }
     this.stylePool.setSelectionBg({
-      type: 'ansi',
+      type: "ansi",
       code: wrapped.slice(0, nul),
-      endCode: wrapped.slice(nul + 1) // always \x1b[49m for bg
+      endCode: wrapped.slice(nul + 1), // always \x1b[49m for bg
     });
     // No scheduleRender: this is called from a React effect that already
     // runs inside the render cycle, and the bg only matters once a
@@ -1203,7 +1384,7 @@ export default class Ink {
    * screen buffer still holds the outgoing content. Accumulated into
    * the selection state and joined back in by getSelectedText.
    */
-  captureScrolledRows(firstRow: number, lastRow: number, side: 'above' | 'below'): void {
+  captureScrolledRows(firstRow: number, lastRow: number, side: "above" | "below"): void {
     captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side);
   }
 
@@ -1236,43 +1417,37 @@ export default class Ink {
    */
   moveSelectionFocus(move: FocusMove): void {
     if (!this.altScreenActive) return;
-    const {
-      focus
-    } = this.selection;
+    const { focus } = this.selection;
     if (!focus) return;
-    const {
-      width,
-      height
-    } = this.frontFrame.screen;
+    const { width, height } = this.frontFrame.screen;
     const maxCol = width - 1;
     const maxRow = height - 1;
-    let {
-      col,
-      row
-    } = focus;
+    let { col, row } = focus;
     switch (move) {
-      case 'left':
-        if (col > 0) col--;else if (row > 0) {
+      case "left":
+        if (col > 0) col--;
+        else if (row > 0) {
           col = maxCol;
           row--;
         }
         break;
-      case 'right':
-        if (col < maxCol) col++;else if (row < maxRow) {
+      case "right":
+        if (col < maxCol) col++;
+        else if (row < maxRow) {
           col = 0;
           row++;
         }
         break;
-      case 'up':
+      case "up":
         if (row > 0) row--;
         break;
-      case 'down':
+      case "down":
         if (row < maxRow) row++;
         break;
-      case 'lineStart':
+      case "lineStart":
         col = 0;
         break;
-      case 'lineEnd':
+      case "lineEnd":
         col = maxCol;
         break;
     }
@@ -1322,7 +1497,7 @@ export default class Ink {
 
     // Tab cycling is the default action — only fires if no handler
     // called preventDefault(). Mirrors browser behavior.
-    if (!event.defaultPrevented && parsedKey.name === 'tab' && !parsedKey.ctrl && !parsedKey.meta) {
+    if (!event.defaultPrevented && parsedKey.name === "tab" && !parsedKey.ctrl && !parsedKey.meta) {
       if (parsedKey.shift) {
         this.focusManager.focusPrevious(this.rootNode);
       } else {
@@ -1381,7 +1556,8 @@ export default class Ink {
     // a char-mode selection so the press still starts a drag even if the
     // word/line scan finds nothing selectable.
     startSelection(this.selection, col, row);
-    if (count === 2) selectWordAt(this.selection, screen, col, row);else selectLineAt(this.selection, screen, row);
+    if (count === 2) selectWordAt(this.selection, screen, col, row);
+    else selectLineAt(this.selection, screen, row);
     // Ensure hasSelection is true so release doesn't re-dispatch onClickAt.
     // selectWordAt no-ops on noSelect; selectLineAt no-ops out-of-bounds.
     if (!this.selection.focus) this.selection.focus = this.selection.anchor;
@@ -1420,16 +1596,22 @@ export default class Ink {
 
     // Store and remove all 'readable' event listeners temporarily
     // This prevents Ink from consuming stdin while the editor is active
-    const readableListeners = stdin.listeners('readable');
-    logForDebugging(`[stdin] suspendStdin: removing ${readableListeners.length} readable listener(s), wasRawMode=${(stdin as NodeJS.ReadStream & {
-      isRaw?: boolean;
-    }).isRaw ?? false}`);
-    readableListeners.forEach(listener => {
+    const readableListeners = stdin.listeners("readable");
+    logForDebugging(
+      `[stdin] suspendStdin: removing ${readableListeners.length} readable listener(s), wasRawMode=${
+        (
+          stdin as NodeJS.ReadStream & {
+            isRaw?: boolean;
+          }
+        ).isRaw ?? false
+      }`,
+    );
+    readableListeners.forEach((listener) => {
       this.stdinListeners.push({
-        event: 'readable',
-        listener: listener as (...args: unknown[]) => void
+        event: "readable",
+        listener: listener as (...args: unknown[]) => void,
       });
-      stdin.removeListener('readable', listener as (...args: unknown[]) => void);
+      stdin.removeListener("readable", listener as (...args: unknown[]) => void);
     });
 
     // If raw mode is enabled, disable it temporarily
@@ -1450,15 +1632,17 @@ export default class Ink {
 
     // Re-attach all the stored listeners
     if (this.stdinListeners.length === 0 && !this.wasRawMode) {
-      logForDebugging('[stdin] resumeStdin: called with no stored listeners and wasRawMode=false (possible desync)', {
-        level: 'warn'
-      });
+      logForDebugging(
+        "[stdin] resumeStdin: called with no stored listeners and wasRawMode=false (possible desync)",
+        {
+          level: "warn",
+        },
+      );
     }
-    logForDebugging(`[stdin] resumeStdin: re-attaching ${this.stdinListeners.length} listener(s), wasRawMode=${this.wasRawMode}`);
-    this.stdinListeners.forEach(({
-      event,
-      listener
-    }) => {
+    logForDebugging(
+      `[stdin] resumeStdin: re-attaching ${this.stdinListeners.length} listener(s), wasRawMode=${this.wasRawMode}`,
+    );
+    this.stdinListeners.forEach(({ event, listener }) => {
       stdin.addListener(event, listener);
     });
     this.stdinListeners = [];
@@ -1483,18 +1667,41 @@ export default class Ink {
     this.options.stdout.write(data);
   }
   private setCursorDeclaration: CursorDeclarationSetter = (decl, clearIfNode) => {
-    if (decl === null && clearIfNode !== undefined && this.cursorDeclaration?.node !== clearIfNode) {
+    if (
+      decl === null &&
+      clearIfNode !== undefined &&
+      this.cursorDeclaration?.node !== clearIfNode
+    ) {
       return;
     }
     this.cursorDeclaration = decl;
   };
   render(node: ReactNode): void {
     this.currentNode = node;
-    const tree = <App stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onHoverAt={this.dispatchHover} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onStdinResume={this.reassertTerminalModes} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
-        <TerminalWriteProvider value={this.writeRaw}>
-          {node}
-        </TerminalWriteProvider>
-      </App>;
+    const tree = (
+      <App
+        stdin={this.options.stdin}
+        stdout={this.options.stdout}
+        stderr={this.options.stderr}
+        exitOnCtrlC={this.options.exitOnCtrlC}
+        onExit={this.unmount}
+        terminalColumns={this.terminalColumns}
+        terminalRows={this.terminalRows}
+        selection={this.selection}
+        onSelectionChange={this.notifySelectionChange}
+        onClickAt={this.dispatchClick}
+        onHoverAt={this.dispatchHover}
+        getHyperlinkAt={this.getHyperlinkAt}
+        onOpenHyperlink={this.openHyperlink}
+        onMultiClick={this.handleMultiClick}
+        onSelectionDrag={this.handleSelectionDrag}
+        onStdinResume={this.reassertTerminalModes}
+        onCursorDeclaration={this.setCursorDeclaration}
+        dispatchKeyboardEvent={this.dispatchKeyboardEvent}
+      >
+        <TerminalWriteProvider value={this.writeRaw}>{node}</TerminalWriteProvider>
+      </App>
+    );
 
     reconciler.updateContainerSync(tree, this.container, null, noop);
     reconciler.flushSyncWork();
@@ -1505,7 +1712,7 @@ export default class Ink {
     }
     this.onRender();
     this.unsubscribeExit();
-    if (typeof this.restoreConsole === 'function') {
+    if (typeof this.restoreConsole === "function") {
       this.restoreConsole();
     }
     this.restoreStderr?.();
@@ -1587,7 +1794,13 @@ export default class Ink {
     if (this.options.stdout.isTTY) {
       // Swap so old front becomes back (for screen reuse), then reset front
       this.backFrame = this.frontFrame;
-      this.frontFrame = emptyFrame(this.frontFrame.viewport.height, this.frontFrame.viewport.width, this.stylePool, this.charPool, this.hyperlinkPool);
+      this.frontFrame = emptyFrame(
+        this.frontFrame.viewport.height,
+        this.frontFrame.viewport.width,
+        this.stylePool,
+        this.charPool,
+        this.hyperlinkPool,
+      );
       this.log.reset();
       // frontFrame is reset, so frame.cursor on the next render is (0,0).
       // Clear displayCursor so the preamble doesn't compute a stale delta.
@@ -1671,20 +1884,24 @@ export default class Ink {
     const stderr = process.stderr;
     const originalWrite = stderr.write;
     let reentered = false;
-    const intercept = (chunk: Uint8Array | string, encodingOrCb?: BufferEncoding | ((err?: Error | null) => void), cb?: (err?: Error | null) => void): boolean => {
-      const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb;
+    const intercept = (
+      chunk: Uint8Array | string,
+      encodingOrCb?: BufferEncoding | ((err?: Error | null) => void),
+      cb?: (err?: Error | null) => void,
+    ): boolean => {
+      const callback = typeof encodingOrCb === "function" ? encodingOrCb : cb;
       // Reentrancy guard: logForDebugging → writeToStderr → here. Pass
       // through to the original so --debug-to-stderr still works and we
       // don't stack-overflow.
       if (reentered) {
-        const encoding = typeof encodingOrCb === 'string' ? encodingOrCb : undefined;
+        const encoding = typeof encodingOrCb === "string" ? encodingOrCb : undefined;
         return originalWrite.call(stderr, chunk, encoding, callback);
       }
       reentered = true;
       try {
-        const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+        const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
         logForDebugging(`[stderr] ${text}`, {
-          level: 'warn'
+          level: "warn",
         });
         if (this.altScreenActive && !this.isUnmounted && !this.isPaused) {
           this.prevFrameContaminated = true;
@@ -1740,7 +1957,7 @@ export function drainStdin(stdin: NodeJS.ReadStream = process.stdin): void {
   }
   // No /dev/tty on Windows; CONIN$ doesn't support O_NONBLOCK semantics.
   // Windows Terminal also doesn't buffer mouse reports the same way.
-  if (process.platform === 'win32') return;
+  if (process.platform === "win32") return;
   // termios is per-device: flip stdin to raw so canonical-mode line
   // buffering doesn't hide partial input from the non-blocking read.
   // Restored in the finally block.
@@ -1757,7 +1974,7 @@ export function drainStdin(stdin: NodeJS.ReadStream = process.stdin): void {
     // setRawMode inside try: on revoked TTY (SIGHUP/SSH disconnect) the
     // ioctl throws EBADF — same recovery path as openSync/readSync below.
     if (!wasRaw) tty.setRawMode?.(true);
-    fd = openSync('/dev/tty', fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    fd = openSync("/dev/tty", fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
     const buf = Buffer.alloc(1024);
     for (let i = 0; i < 64; i++) {
       if (readSync(fd, buf, 0, buf.length, null) <= 0) break;
@@ -1784,5 +2001,20 @@ export function drainStdin(stdin: NodeJS.ReadStream = process.stdin): void {
 }
 /* eslint-enable custom-rules/no-sync-fs */
 
-const CONSOLE_STDOUT_METHODS = ['log', 'info', 'debug', 'dir', 'dirxml', 'count', 'countReset', 'group', 'groupCollapsed', 'groupEnd', 'table', 'time', 'timeEnd', 'timeLog'] as const;
-const CONSOLE_STDERR_METHODS = ['warn', 'error', 'trace'] as const;
+const CONSOLE_STDOUT_METHODS = [
+  "log",
+  "info",
+  "debug",
+  "dir",
+  "dirxml",
+  "count",
+  "countReset",
+  "group",
+  "groupCollapsed",
+  "groupEnd",
+  "table",
+  "time",
+  "timeEnd",
+  "timeLog",
+] as const;
+const CONSOLE_STDERR_METHODS = ["warn", "error", "trace"] as const;

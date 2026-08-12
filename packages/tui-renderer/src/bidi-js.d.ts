@@ -6,15 +6,15 @@
  * 形状核对自 node_modules/.bun/bidi-js@1.0.3/node_modules/bidi-js/dist/bidi.js：
  * `getEmbeddingLevels` 返回 `{ levels: Uint8Array, paragraphs: [...] }`（第 795 行）。
  */
-declare module 'bidi-js' {
+declare module "bidi-js" {
   export type EmbeddingLevelsResult = {
-    levels: Uint8Array
-    paragraphs: Array<{ start: number; end: number }>
-  }
+    levels: Uint8Array;
+    paragraphs: Array<{ start: number; end: number }>;
+  };
 
   export type BidiInstance = {
-    getEmbeddingLevels(text: string, baseDirection?: 'ltr' | 'rtl' | 'auto'): EmbeddingLevelsResult
-  }
+    getEmbeddingLevels(text: string, baseDirection?: "ltr" | "rtl" | "auto"): EmbeddingLevelsResult;
+  };
 
-  export default function bidiFactory(): BidiInstance
+  export default function bidiFactory(): BidiInstance;
 }

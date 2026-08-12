@@ -7,11 +7,17 @@
  * 找不到导出（TS2305）。
  */
 export type Cursor = {
-  x: number
-  y: number
-  visible: boolean
-}
+  x: number;
+  y: number;
+  visible: boolean;
+};
 
-export function moveCursor(x: number, y: number): string { return '' }
-export function hideCursor(): string { return '' }
-export function showCursor(): string { return '' }
+export function moveCursor(x: number, y: number): string {
+  return "";
+}
+export function hideCursor(): string {
+  return "";
+}
+export function showCursor(): string {
+  return "";
+}

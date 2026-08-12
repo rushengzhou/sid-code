@@ -1,6 +1,6 @@
 import { c as _c } from "../_vendor/compiler-runtime.js";
-import React from 'react';
-import Box from './Box.js';
+import React from "react";
+import Box from "./Box.js";
 
 /**
  * A flexible space that expands along the major axis of its containing layout.

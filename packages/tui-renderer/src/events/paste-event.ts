@@ -1,2 +1,4 @@
 // Stub: ink/events/paste-event.ts
-export interface PasteEvent { text: string }
+export interface PasteEvent {
+  text: string;
+}

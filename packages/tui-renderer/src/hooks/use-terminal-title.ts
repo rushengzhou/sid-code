@@ -1,7 +1,7 @@
-import { useContext, useEffect } from 'react'
-import stripAnsi from 'strip-ansi'
-import { OSC, osc } from '../termio/osc.js'
-import { TerminalWriteContext } from '../useTerminalNotification.js'
+import { useContext, useEffect } from "react";
+import stripAnsi from "strip-ansi";
+import { OSC, osc } from "../termio/osc.js";
+import { TerminalWriteContext } from "../useTerminalNotification.js";
 
 /**
  * Declaratively set the terminal tab/window title.
@@ -20,19 +20,19 @@ import { TerminalWriteContext } from '../useTerminalNotification.js'
  * 与 claude-code issue #18326 的建议一致。重复设置同一标题无副作用。
  */
 export function useTerminalTitle(title: string | null): void {
-  const writeRaw = useContext(TerminalWriteContext)
+  const writeRaw = useContext(TerminalWriteContext);
 
   useEffect(() => {
-    if (title === null || !writeRaw) return
+    if (title === null || !writeRaw) return;
 
-    const clean = stripAnsi(title)
+    const clean = stripAnsi(title);
 
-    if (process.platform === 'win32') {
-      process.title = clean
+    if (process.platform === "win32") {
+      process.title = clean;
     } else {
       // OSC 2（window title，xterm.js 完整支持）+ OSC 0（title+icon，兜底）。
-      writeRaw(osc(OSC.SET_TITLE, clean))
-      writeRaw(osc(OSC.SET_TITLE_AND_ICON, clean))
+      writeRaw(osc(OSC.SET_TITLE, clean));
+      writeRaw(osc(OSC.SET_TITLE_AND_ICON, clean));
     }
-  }, [title, writeRaw])
+  }, [title, writeRaw]);
 }

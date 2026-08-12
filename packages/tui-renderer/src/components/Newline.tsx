@@ -1,5 +1,5 @@
 import { c as _c } from "../_vendor/compiler-runtime.js";
-import React from 'react';
+import React from "react";
 export type Props = {
   /**
    * Number of newlines to insert.
@@ -14,9 +14,7 @@ export type Props = {
  */
 export default function Newline(t0: Props) {
   const $ = _c(4);
-  const {
-    count: t1
-  } = t0;
+  const { count: t1 } = t0;
   const count = t1 === undefined ? 1 : t1;
   let t2;
   if ($[0] !== count) {

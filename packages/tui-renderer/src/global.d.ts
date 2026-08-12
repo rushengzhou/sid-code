@@ -14,68 +14,68 @@
 // 注意：`export {}` 会让本文件变成模块，模块内的 `declare global` 才生效；
 // 而 Box/ScrollBox 里的 `import '../global.d.ts'` 依赖它是模块。两者一致，别删。
 
-import type { DOMElement } from './dom.js'
-import type { ClickEvent } from './events/click-event.js'
-import type { FocusEvent } from './events/focus-event.js'
-import type { KeyboardEvent } from './events/keyboard-event.js'
-import type { Styles, TextStyles } from './styles.js'
+import type { DOMElement } from "./dom.js";
+import type { ClickEvent } from "./events/click-event.js";
+import type { FocusEvent } from "./events/focus-event.js";
+import type { KeyboardEvent } from "./events/keyboard-event.js";
+import type { Styles, TextStyles } from "./styles.js";
 
 /** ink-box 支持的事件与焦点属性（与 components/Box.tsx 的 Props 对齐） */
 type InkBoxHostProps = {
-  ref?: React.Ref<DOMElement>
-  style?: Styles
+  ref?: React.Ref<DOMElement>;
+  style?: Styles;
   /** Tab 序号：>= 0 参与 Tab/Shift+Tab 循环，-1 仅可编程聚焦 */
-  tabIndex?: number
+  tabIndex?: number;
   /** 挂载即聚焦，由 reconciler 的 commitMount 阶段调用 FocusManager */
-  autoFocus?: boolean
-  onClick?: (event: ClickEvent) => void
-  onFocus?: (event: FocusEvent) => void
-  onFocusCapture?: (event: FocusEvent) => void
-  onBlur?: (event: FocusEvent) => void
-  onBlurCapture?: (event: FocusEvent) => void
-  onKeyDown?: (event: KeyboardEvent) => void
-  onKeyDownCapture?: (event: KeyboardEvent) => void
-  onMouseEnter?: () => void
-  onMouseLeave?: () => void
+  autoFocus?: boolean;
+  onClick?: (event: ClickEvent) => void;
+  onFocus?: (event: FocusEvent) => void;
+  onFocusCapture?: (event: FocusEvent) => void;
+  onBlur?: (event: FocusEvent) => void;
+  onBlurCapture?: (event: FocusEvent) => void;
+  onKeyDown?: (event: KeyboardEvent) => void;
+  onKeyDownCapture?: (event: KeyboardEvent) => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
   /**
    * 作为 DOM 属性直传（而非走 ref）：ref 回调在首次 commit 之后才触发，
    * 对第一帧来说太晚。见 components/ScrollBox.tsx 的注释。
    */
-  stickyScroll?: boolean
-  children?: React.ReactNode
-}
+  stickyScroll?: boolean;
+  children?: React.ReactNode;
+};
 
 declare global {
   namespace React {
     namespace JSX {
       interface IntrinsicElements {
-        'ink-box': InkBoxHostProps
-        'ink-text': {
-          style?: Styles
+        "ink-box": InkBoxHostProps;
+        "ink-text": {
+          style?: Styles;
           /** 文本装饰（颜色/粗体/下划线等），由 reconciler 写到 node.textStyles */
-          textStyles?: TextStyles
-          children?: React.ReactNode
-        }
-        'ink-virtual-text': {
-          style?: Styles
-          textStyles?: TextStyles
-          children?: React.ReactNode
-        }
-        'ink-link': {
+          textStyles?: TextStyles;
+          children?: React.ReactNode;
+        };
+        "ink-virtual-text": {
+          style?: Styles;
+          textStyles?: TextStyles;
+          children?: React.ReactNode;
+        };
+        "ink-link": {
           /** OSC 8 超链接目标 */
-          href?: string
-          children?: React.ReactNode
-        }
-        'ink-raw-ansi': {
+          href?: string;
+          children?: React.ReactNode;
+        };
+        "ink-raw-ansi": {
           /** 预渲染好的 ANSI 字符串，跳过布局测量直接落盘到输出 */
-          rawText?: string
+          rawText?: string;
           /** 已知宽高：ink-raw-ansi 的 measure 函数直接用它，不再解析内容 */
-          rawWidth?: number
-          rawHeight?: number
-        }
+          rawWidth?: number;
+          rawHeight?: number;
+        };
       }
     }
   }
 }
 
-export {}
+export {};
