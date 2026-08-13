@@ -27,6 +27,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # 最小权限：读代码 + 往 PR 写一条评论。
+    #
+    # 不给这个块的后果实测过（2026-08-13 首个真跑的 PR）：GITHUB_TOKEN 默认只读，
+    # 末尾 "Comment on PR" 步骤拿 403 `Resource not accessible by integration` 挂掉，
+    # 于是 job 有**两个**失败步骤——真正的失败（smoke 本身）被淹在 octokit 的
+    # 报错栈里，排查时要先翻掉几十行 x-ratelimit-* 响应头才看得到根因。
+    #
+    # pull-requests: write 是 createComment 需要的最小权限；刻意不给 write 到别处。
+    permissions:
+      contents: read
+      pull-requests: write
+
     # ⚠️ 跑真 LLM 需要 ANTHROPIC_API_KEY；fork PR 默认无 secret，需改 pull_request_target 或要求 maintainer 手动触发
     if: github.event.pull_request.head.repo.full_name == github.repository
 
