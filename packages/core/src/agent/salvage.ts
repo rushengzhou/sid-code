@@ -290,7 +290,9 @@ function suggestNextSteps(snap: SalvageSnapshot, opts: BuildSalvageOptions): str
   }
 
   if (lines.length === 0) {
-    lines.push("按上面的结论继续；如需补全未完成部分，请把已有结论写进新的子任务 prompt 以免重复探索。");
+    lines.push(
+      "按上面的结论继续；如需补全未完成部分，请把已有结论写进新的子任务 prompt 以免重复探索。",
+    );
   }
   return lines;
 }
