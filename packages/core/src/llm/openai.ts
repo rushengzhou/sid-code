@@ -16,6 +16,7 @@ import type {
   Usage,
   AccumulatedResponse,
   ContentBlock,
+  ToolDefinition,
 } from "./types.ts";
 import { getLogger } from "../debug/logger.ts";
 import {
@@ -37,7 +38,9 @@ import { lookupModelCompat } from "./model-compat.ts";
 import {
   classifyProtocolFamily,
   getDialectWire,
+  getToolSchemaDialect,
   isChatCompletionsFamily,
+  sanitizeToolSchema,
 } from "./dialect/catalog.ts";
 import {
   learnFromError,
@@ -61,6 +64,7 @@ import { buildResponsesRequest } from "./openai-responses-request.ts";
 import {
   parseResponsesStream,
   parseResponsesBody,
+  isResponsesContentProgress,
   type ResponsesNonStreamingBody,
 } from "./openai-responses.ts";
 import { extractInternalEnTags } from "../config/prompt-lang.ts";
@@ -193,6 +197,37 @@ export class OpenAIProvider implements Provider {
     const declared = lookupModelCompat(alias)?.requiresReasoningContentForToolCalls;
     if (declared !== undefined) return declared;
     return lookupCatalog(model)?.requiresReasoningContentForToolCalls === true;
+  }
+
+  /**
+   * 把工具定义转成 Chat Completions 的嵌套 `function` 格式，并按族方言清理 schema。
+   *
+   * 流式与非流式两条路径共用（此前两处各手写一遍同样的 `.map()`——本仓「同一转换写两遍」
+   * 有多次漂移前科，`markLastUserMessageCacheBreakpoint` 就是同一原因收敛的）。
+   *
+   * ## 为什么这条线只剥元信息键、不打 strict
+   *
+   * `registry.ts:79` 给 40 个内置工具打了 `strict: true`，但**本文件全文零 `strict` 命中**
+   * ——这条线从来不下发它。要接线需同时决定 DeepSeek 的 `/beta` base_url 切换
+   * （strict 在 DeepSeek 上是 beta 端点专属），那是改渠道行为，且 DeepSeek 官方仓有
+   * strict 吐畸形 JSON 的未闭 issue。**开关是独立一件事，不混在本次改动里**——
+   * 混了就同时改了「schema 形状」与「发不发 strict」两个变量，出问题分不清是谁。
+   *
+   * 故这里传 `strict: false`：只剥 `$schema` 这类 zod 无条件注入、五家都不认的元信息键
+   * （实测 40 份 schema 合计 ~570 token/轮，且常驻 prompt cache 工具区前缀）。
+   * 依据见 `dialect/tool-schema.md`。
+   */
+  private static convertTools(model: string, tools?: ToolDefinition[]) {
+    if (!tools) return undefined;
+    const dialect = getToolSchemaDialect(classifyProtocolFamily({ model }));
+    return tools.map((t) => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: sanitizeToolSchema(t.input_schema, dialect, { strict: false }).schema,
+      },
+    }));
   }
 
   /**
@@ -794,15 +829,8 @@ export class OpenAIProvider implements Provider {
     // 另传别名供 compat 声明查表——两者不能合并，见 requiresReasoningContentForToolCalls）
     const messages = this.convertMessages(params.messages, effectiveModel, params.model);
 
-    // 转换工具定义
-    const tools = params.tools?.map((t) => ({
-      type: "function",
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: t.input_schema,
-      },
-    }));
+    // 转换工具定义（schema 按族方言清理，见 convertTools 注释）
+    const tools = OpenAIProvider.convertTools(effectiveModel, params.tools);
 
     const requestBody: any = {
       model: effectiveModel,
@@ -1340,9 +1368,24 @@ export class OpenAIProvider implements Provider {
       let accumulatedUsage: Usage = { inputTokens: 0, outputTokens: 0 };
       let accumulatedOutputText = "";
 
-      // StreamLifecycle 事件级兜底（对标 Chat Completions 路径）
+      // StreamLifecycle 事件级兜底。
+      //
+      // ⚠️ 与 Chat Completions 路径**不能照抄**（本次遥测分诊查出的真缺陷）。
+      // 那条路径把 idle 放宽到 overall 同量级、且不启用 content progress 层，理由是
+      // 「parseSSE 内的**字节级** idle/content 超时更严格、先触发」——那是成立的前提。
+      // 但本路径的解析器 `parseResponsesStream` → `readSSEEvents` 里**一个定时器都没有**
+      // （全文 setTimeout/setInterval 命中数为 0），于是照抄那套放宽等于：
+      // 字节级防线不存在、事件级防线又被主动调宽到 600s，两层同时失守。
+      //
+      // 症状是"看着有三层超时、实测只有漏斗那层在干活"：真实轨迹里 8 个 TimeoutFired
+      // 全部是 `fallback_stream_timeout`，lifecycle 三层一次没触发过。修法是把本路径的
+      // idle/content 两层按 network-profile 的真实档位启用（它们本就是为"没有字节级
+      // 防线"的场景准备的），让 300s 档先于漏斗的 300s+ 抓到静默流。
       const lifecycle = createStreamLifecycle<StreamEvent>({
-        idleTimeoutMs: LIFECYCLE_PRESETS.mainLoop.overallTimeoutMs,
+        idleTimeoutMs: streamTimeouts.idleTimeoutMs,
+        // 与 idle 分层的意义：idle 对任何事件（含 `:` keep-alive 注释行）都续命，
+        // content progress 只对 content_block_delta 续命——识破"只有心跳、无真内容"。
+        contentProgressTimeoutMs: streamTimeouts.contentProgressTimeoutMs,
         // 配置-3：overall 阈值走 network-profile 统一解析（复用上方 streamTimeouts）
         overallTimeoutMs: streamTimeouts.overallTimeoutMs,
         stallWarnMs: 30_000,
@@ -1357,10 +1400,27 @@ export class OpenAIProvider implements Provider {
             emitStreamPhase(obsIndex, "first_content", { ttft_ms: ttftMs, model: attrModel });
           }
         },
+        // 三层各自上报自己的 layer 与**自己的**阈值（对齐 anthropic.ts 的写法）。
+        // 原写法把 content_progress 也归成 `idle_timeout`、且 threshold 一律报 overall 的
+        // 600s：既分不清"彻底静默"与"只有心跳无内容"（两者修法不同——前者查网络/网关，
+        // 后者查模型是否在空转），又让 threshold_ms 与真实触发阈值不符。
+        // 错误归因比没有归因更坏，这条是本仓反复记的教训。
         onTimeout: (layer) => {
           try {
-            emitTimeoutFired(obsIndex, layer === "overall" ? "turn_hard_timeout" : "idle_timeout", {
-              threshold_ms: LIFECYCLE_PRESETS.mainLoop.overallTimeoutMs,
+            const timeoutLayer =
+              layer === "content_progress"
+                ? "content_progress_timeout"
+                : layer === "overall"
+                  ? "turn_hard_timeout"
+                  : "idle_timeout";
+            const threshold =
+              layer === "content_progress"
+                ? streamTimeouts.contentProgressTimeoutMs
+                : layer === "overall"
+                  ? streamTimeouts.overallTimeoutMs
+                  : streamTimeouts.idleTimeoutMs;
+            emitTimeoutFired(obsIndex, timeoutLayer, {
+              threshold_ms: threshold,
               model: attrModel,
             });
           } catch {
@@ -1375,8 +1435,18 @@ export class OpenAIProvider implements Provider {
             /* 安全 */
           }
         },
-        isContentProgress: (ev) =>
-          ev.type === "content_block_delta" || ev.type === "content_block_start",
+        // 用 openai-responses.ts 导出的判定函数，不再就地手写第二份。
+        //
+        // 两处差异是实的、且方向不利：手写这份把 `content_block_start` 也算进展，
+        // 而 Responses 流每开一个 text / tool_use / reasoning 块都会发一次
+        // `content_block_start` —— 一个反复开块却不产出任何 delta 的流会被它一直续命，
+        // 正是这层要识破的形态。导出那份只认 `content_block_delta`，与注释里写的
+        // 「只对 content_block_delta 续命」一致。
+        //
+        // 这份手写副本此前不影响行为，是因为 contentProgressTimeoutMs 没传、整层空转
+        // （即上面修掉的缺陷）—— 层一接通，它就从死代码变成会削弱防线的活代码。
+        // 一份判据两处实现，本仓已栽过多次，收敛到唯一导出。
+        isContentProgress: isResponsesContentProgress,
       });
 
       // 消费 parseResponsesStream + StreamLifecycle 包装
@@ -1494,14 +1564,8 @@ export class OpenAIProvider implements Provider {
 
     // 与流式路径同口径传别名（compat 查表用），漏传即「非流式路径上用户声明静默失效」。
     const messages = this.convertMessages(params.messages, effectiveModel, params.model);
-    const tools = params.tools?.map((t) => ({
-      type: "function",
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: t.input_schema,
-      },
-    }));
+    // 与流式路径共用同一转换（含 schema 方言清理），避免两条线的 schema 形状漂移。
+    const tools = OpenAIProvider.convertTools(effectiveModel, params.tools);
 
     const requestBody: any = {
       model: effectiveModel,
