@@ -26,6 +26,8 @@ const ALL_EVENT_TYPES: RetryTelemetryEvent["type"][] = [
   "max_tokens_adjust",
   "persistent_retry_wait",
   "auth_refresh",
+  "cooldown_probe",
+  "cooldown_probe_denied",
   "stream_stall",
   "stream_idle_timeout",
   "stream_content_progress_timeout",
