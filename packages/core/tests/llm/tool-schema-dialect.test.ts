@@ -130,7 +130,9 @@ describe("Anthropic 原生：按文档子集裁剪数值与长度约束", () => 
 
   test("zod `.int()` 的安全整数边界不转写描述（纯噪音，实测 grep 一个工具就有 7 对）", () => {
     const input = zodLike(
-      { n: { type: "integer", minimum: -Number.MAX_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER } },
+      {
+        n: { type: "integer", minimum: -Number.MAX_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER },
+      },
       ["n"],
     );
     const n = (
@@ -186,8 +188,10 @@ describe("Anthropic 原生：按文档子集裁剪数值与长度约束", () => 
       },
       ["e", "p", "k"],
     );
-    const props = sanitizeToolSchema(input, dialect, { strict: true }).schema
-      .properties as Record<string, any>;
+    const props = sanitizeToolSchema(input, dialect, { strict: true }).schema.properties as Record<
+      string,
+      any
+    >;
     expect(props.e.format).toBe("email");
     expect(props.p.pattern).toBe("^a");
     expect(props.k.enum).toEqual(["x", "y"]);
@@ -320,7 +324,9 @@ describe("strict 结构性互斥：两类都降级，不硬塞必被拒的 schem
   });
 
   test("patternProperties 同样判互斥", () => {
-    const input = zodLike({ m: { type: "object", patternProperties: { "^a": { type: "string" } } } });
+    const input = zodLike({
+      m: { type: "object", patternProperties: { "^a": { type: "string" } } },
+    });
     expect(sanitizeToolSchema(input, dialect, { strict: true }).strictUsable).toBe(false);
   });
 
@@ -333,7 +339,10 @@ describe("strict 结构性互斥：两类都降级，不硬塞必被拒的 schem
     expect(hasStrictIncompatibleNode({ anyOf: [{ type: "string" }, {}] })).toBe(true);
     expect(hasStrictIncompatibleNode({ type: "array", items: {} })).toBe(true);
     expect(
-      hasStrictIncompatibleNode({ type: "object", properties: { deep: { type: "array", items: {} } } }),
+      hasStrictIncompatibleNode({
+        type: "object",
+        properties: { deep: { type: "array", items: {} } },
+      }),
     ).toBe(true);
     expect(
       hasStrictIncompatibleNode({ type: "object", properties: { ok: { type: "string" } } }),
