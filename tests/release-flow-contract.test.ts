@@ -254,6 +254,73 @@ describe("CI 门禁存在（全量单测前移到 PR 阶段）", () => {
       expect(bunPos).toBeLessThan(rgPos);
     });
   });
+
+  // ── 汇聚门 all-checks-passed（2026-08-19 接入）───────────────────────────────────
+  //
+  // ruleset protect-main 的必需检查从三个具体 job 名换成了这一个汇聚 job。
+  // 这组断言守的是**它不会静默变成假绿**——这道门禁的三种失效方式全都不报红：
+  //   ① 新增 job 忘了加进 needs → 新 job 红了，汇聚门照样绿
+  //   ② 丢掉 if: always() → 上游失败时本 job 变 skipped，而 GitHub 把 skipped 的
+  //      必需检查算作**通过**
+  //   ③ 判据写成「全部 == success」→ 将来任何带 if 条件的 job 被跳过就整体卡死
+  describe("汇聚门 all-checks-passed 不得静默变成假绿", () => {
+    /** 解析后的 jobs 映射；YAML 1.1 会把裸 `on` 当布尔真键，这里只取 jobs 不受影响。 */
+    function jobsOf(): Record<string, Record<string, unknown>> {
+      const doc = parseYaml(CI) as Record<string, unknown>;
+      return doc.jobs as Record<string, Record<string, unknown>>;
+    }
+
+    test("汇聚 job 存在", () => {
+      expect(Object.keys(jobsOf())).toContain("all-checks-passed");
+    });
+
+    // 这是本组最重要的一条：它把「ruleset 只绑一个检查」这个决定，
+    // 与「所有 job 都真的被那个检查覆盖」这件事机械地绑在一起。
+    // 没有它，加一个 job 就等于开了一个绕过分支保护的后门，且 PR 页面一片绿。
+    test("needs 覆盖除自己以外的全部 job（新增 job 忘了登记即判红）", () => {
+      const jobs = jobsOf();
+      const needs = jobs["all-checks-passed"]?.needs as string[] | undefined;
+      expect(Array.isArray(needs)).toBe(true);
+
+      const others = Object.keys(jobs)
+        .filter((k) => k !== "all-checks-passed")
+        .sort();
+      expect([...(needs as string[])].sort()).toEqual(others);
+    });
+
+    test("if: always() 在（skipped 的必需检查会被算作通过）", () => {
+      expect(jobsOf()["all-checks-passed"]?.if).toBe("always()");
+    });
+
+    test("判据看 failure/cancelled，不看「全部 success」", () => {
+      const steps = jobsOf()["all-checks-passed"]?.steps as Array<Record<string, string>>;
+      const script = steps.map((s) => s.run ?? "").join("\n");
+      expect(script).toContain("contains(needs.*.result, 'failure')");
+      expect(script).toContain("contains(needs.*.result, 'cancelled')");
+      expect(script).toMatch(/exit 1/);
+    });
+  });
+
+  // ── 合并队列（2026-08-19 接入）─────────────────────────────────────────────────
+  //
+  // 队列解决的是 PR 级门禁**测不到**的一类失败：两个 PR 各自对着自己的 base 绿了，
+  // 合到一起却红（git 无冲突但语义冲突）。并行开发时这是必然而非偶发。
+  describe("合并队列触发与不取消", () => {
+    test("merge_group 在 on 里", () => {
+      const doc = parseYaml(CI) as Record<string, unknown>;
+      const on = (doc.on ?? doc[true as unknown as keyof typeof doc]) as Record<string, unknown>;
+      expect(Object.keys(on)).toContain("merge_group");
+    });
+
+    // merge_group 的 run 是「合并后状态」的唯一验证结论，取消掉就拿不到判据，
+    // 表现为 PR 莫名其妙地入队又被弹出——这个现象不长得像 CI 配置问题。
+    test("cancel-in-progress 对 merge_group 关闭", () => {
+      const doc = parseYaml(CI) as Record<string, unknown>;
+      const cancel = (doc.concurrency as Record<string, unknown>)?.["cancel-in-progress"];
+      // 断言表达式而非布尔：写死 true/false 都会让 merge_group 走错分支。
+      expect(String(cancel)).toContain("merge_group");
+    });
+  });
 });
 
 // 2026-08-15 顺带查出的文档漂移：CONTRIBUTING.md「不要直接 push 到 main」那节，
@@ -294,5 +361,66 @@ describe("CONTRIBUTING 对 workflow 触发条件的断言不漂移", () => {
     const t = triggersOf("ci.yml");
     expect(t).toContain("pull_request");
     expect(t).toContain("push");
+  });
+
+  // ── 2026-08-19：合并方式与必需检查一起改了，文档里的对应描述必须跟着走 ──────────
+  //
+  // 这三条锁的是「文档说的合并机制 == 仓库实际配置」。它们不查 GitHub API（单测必须
+  // 离线且确定性），改锁**文档内部自洽 + 与本仓代码自洽**：
+  // 文档说 changelog 走 --first-parent，那 scripts/ 里就必须真的是它。
+  test("不得再声称用 squash merge（已改为默认 merge commit）", () => {
+    // 允许提到 squash（「squash 仍然允许」是事实），但不许出现「用 squash merge」这个规定式说法
+    expect(CONTRIBUTING).not.toMatch(/用\s*\*\*squash merge\*\*/);
+    // 正向：必须写明默认 merge commit
+    expect(CONTRIBUTING).toMatch(/默认用 merge commit/);
+  });
+
+  test("必需检查的描述与汇聚门一致（不得再列三个具体 job 名当必需检查）", () => {
+    expect(CONTRIBUTING).toContain("all-checks-passed");
+    // 文档里仍可以复述那次事故（「事故当时绑的是三个 job 名」），但不许把它写成**现状要求**。
+    // 判据：「要求的三个检查」这个现在时说法必须消失。
+    expect(CONTRIBUTING).not.toMatch(/要求的三个检查/);
+  });
+
+  test("文档说 changelog 走 --first-parent，代码里就必须是（跨文件自洽）", () => {
+    expect(CONTRIBUTING).toContain("--first-parent");
+    const lib = readFileSync(join(ROOT, "scripts/lib/changelog-git.ts"), "utf8");
+    expect(lib).toMatch(/HISTORY_WALK_FLAG\s*=\s*"--first-parent"/);
+  });
+
+  // PR 标题会成为 merge commit 的 subject，这个链条依赖仓库设置 merge_commit_title=PR_TITLE。
+  // 设置本身查不到（离线），但能锁住文档把这个依赖**写出来**——它是隐式契约里最容易被忘的一环：
+  // 默认值 MERGE_MESSAGE 会生成 "Merge pull request #N from ..."，不合 Conventional Commits。
+  test("文档点明了 merge_commit_title=PR_TITLE 这个隐式依赖", () => {
+    expect(CONTRIBUTING).toContain("merge_commit_title");
+    expect(CONTRIBUTING).toContain("PR_TITLE");
+  });
+
+  // ⚠️ 这条锁的是一处**已经写错过一次**的表述：strict 必需检查策略被写成
+  // 「保证 CI 跑的是合并后的内容」——那是合并队列的能力，strict 做不到。
+  // 两个 PR 都通过 strict 后先后合入时，后合那个的 CI 结论仍然是合并前的。
+  // 把 strict 当队列的替代品会让人放心地并行开多路，而语义冲突在本仓
+  // **没有合并前的机制对策**（队列在个人账户仓库开不了，422）。
+  // 失效形态是**假安全**：什么都不会红，直到某次合起来炸在 main 上。
+  test("不得声称 strict 策略等价于合并队列（它保证不了「合并后的内容」）", () => {
+    expect(CONTRIBUTING).not.toMatch(/strict[^\n]*保证 CI 跑的是合并后的内容/);
+    // 正向：必须写明两者不等价
+    expect(CONTRIBUTING).toMatch(/strict 不等价于队列/);
+  });
+
+  test("ci.yml 里的 merge_group 注释必须说明它当前开不了（否则读者以为队列在生效）", () => {
+    // 本 describe 的作用域里没有 CI 常量（它在上一个 describe 里），就地读。
+    const ci = readFileSync(join(ROOT, ".github/workflows/ci.yml"), "utf8");
+    expect(ci).toMatch(/本仓目前开不了队列/);
+    expect(ci).toContain("Invalid rule 'merge_queue'");
+  });
+
+  // 新拆分判据（2026-08-19）：旧规则「互不依赖的缺陷各自一个 PR」被读成「必须各自一个」，
+  // 实测在 11 个缺陷的方案上产出 13 个 PR。这条锁住旧措辞不回来。
+  test("拆分判据已换成「可独立上线/回滚/一次 review」，旧措辞不得复现", () => {
+    expect(CONTRIBUTING).not.toMatch(/\*\*互不依赖的缺陷各自一个 PR\*\*/);
+    expect(CONTRIBUTING).toMatch(/能独立上线/);
+    expect(CONTRIBUTING).toMatch(/能独立回滚/);
+    expect(CONTRIBUTING).toMatch(/能一次 review 完/);
   });
 });

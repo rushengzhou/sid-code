@@ -129,10 +129,15 @@ DEEPSEEK_API_KEY=xxx bun run eval:run -- --provider sid-code --cases case_001
 **不是** `synchronize` —— 所以它**仍然不触发 CI**，而且此后再没有任何事件能触发它。
 
 后果不是「少跑一次」，是**这个 PR 永久卡死**：ruleset `protect-main` 要求
-`test (ubuntu-latest)` / `test (macos-latest)` / `lint` 三个检查，它们全部由 `ci.yml` 产出。
-一个 run 都没有 → 三个检查恒为 pending，PR 页面显示
+`all-checks-passed` 这个检查，它由 `ci.yml` 产出。
+一个 run 都没有 → 检查恒为 pending，PR 页面显示
 `Some checks haven't completed yet` + `Waiting for status to be reported`。
 **没有红叉，只有一个永远转不完的圈**，比直接失败更难归因。
+
+> 事故当时（2026-08-15）绑的是 `test (ubuntu-latest)` / `test (macos-latest)` / `lint`
+> 三个具体 job 名，2026-08-19 已收成一个汇聚 job（见下文「必需检查只有一个」）。
+> **换成一个检查并不能修掉这个失败模式** —— 检查数从 3 变 1，恒 pending 照样卡死。
+> 真正修它的是 `types` 里那个 `edited`。
 
 `ci.yml` 现在显式声明了 `types: [opened, synchronize, reopened, edited]` 来覆盖这种情况
 （反漂移门禁在 `tests/release-flow-contract.test.ts`），所以自动改 base 之后 CI 会补跑。
@@ -151,8 +156,7 @@ gh pr close <n> && gh pr reopen <n>    # 发 reopened，不留多余提交
 即使你有权限。理由是机制性的，不是纪律要求：
 
 - 直推绕过 PR，就没有任何 diff review 的落点，也绕过 ruleset `protect-main`
-  要求的三个检查（`test (ubuntu-latest)` / `test (macos-latest)` / `lint`）
-  在**合入之前**给出结论这件事。
+  要求的 `all-checks-passed` 在**合入之前**给出结论这件事。
 - `ci.yml` 虽然 `push: branches: [main]` 也会跑，但那时代码**已经在 main 上了** ——
   红了是在污染主干之后才知道，而不是之前。
 - 改到一半的状态会暴露给所有人：这是开源仓库，`main` 是别人 `git clone` 拿到的东西。
@@ -176,22 +180,106 @@ git switch -c docs/contributing-branch-policy
 > 历史分支里有 `feature/xxx` 形式（分包前留下的），**新分支统一用 `feat/`**，
 > 与 commit type 同名，省掉「这个前缀对应哪个 type」的换算。
 
-### 一个 PR 一件事，宁可拆多个
+### 一个 PR = 一个可独立上线 / 回滚 / 一次 review 完的单元
 
-这条在下面「提交与 PR」一节也写了，这里补充**怎么拆**：
+> ⚠️ **2026-08-19 判据已改**。旧规则是「互不依赖的缺陷各自一个 PR」，
+> 它被读成了「必须各自一个」，实测在一份 11 个缺陷的方案上产出了 **13 个 PR**、
+> 依赖链 13 个节点。新判据下同一份方案是 9–11 个，依赖链塌到 4 层以内。
+> 已按旧判据拆好的方案文档见本节末尾的迁移说明。
+
+**PR 不是工作量单位，是审查 / 回滚 / 上线单位。** 三条测试：
+
+1. **能独立上线** —— 合入后自己就是一个完整状态，不是「等另一个 PR 才不算半成品」。
+2. **能独立回滚** —— `revert` 它不会让 `main` 停在半修复状态，也不会顺带带走别的已修好的东西。
+3. **能一次 review 完** —— 一口气读完，中途不用回想别的 PR 改了什么。
+
+**任一条不过就合并**（不过 1 或 2）**，或者再拆小**（不过 3）。
+
+⚠️ **三条全过 ≠ 必须各自一个 PR** —— 这是旧规则最容易被误读的地方。
+三条都过时，**按关注点合到最大**：只要 review 时脑子里装的是同一件事，就合成一个。
+PR 数本身有固定成本（分支、CI 一轮、review 的上下文切换、并行时一份
+`node_modules` 275–413M），拆得越碎不是越安全。
+
+**唯一强到能推翻「合起来」的理由是上线时机**：一份方案里 3 个「用户正在受损」的 P0
+和 4 个「加固」的 P2 绑在一起，等于让 P0 的修复速度由 P2 决定。**这条不是流程洁癖，
+是用户能感知的损失。** 反过来，同优先级、同关注点的东西没有理由分开。
+
+其余三条细则不变：
 
 - 按**关注点**拆，不按文件数拆。改 10 个文件修一个 bug 是一个 PR；
   改 2 个文件修两个无关 bug 是两个 PR。
-- 修复方案文档里列了 N 个缺陷时，**互不依赖的缺陷各自一个 PR**；
-  强耦合的（改了 A 不改 B 就是半成品）放同一个 PR，并在正文说清为什么绑一起。
+- **上限：单 PR > 300 个文件必须拆**。判据是一条真实事故链 ——
+  `1bf92d39`（改 1,613 个文件）→ `5acda521`（补 212 个漏提交的文件，`main` 上
+  **HEAD 构建不出来**）。那个体积既 review 不了，当时也没有 CI 在合并前拦。
 - 顺手发现的无关问题（路径漂移、拼写、注释过时）：单独开 `docs:` / `chore:` 的 PR，
   **不要塞进正在做的功能 PR 里**。混进去会让 review 的人分不清哪些改动是必要的。
 
+**一个连带效果值得知道**：同一个 PR **内部不存在并行冲突**。按上面合完之后，
+原先「因为改同一个文件所以要分层串行」的一批约束会自动消失
+（实测一份方案的 L1/L2/L3 三层塌成一层），而层间等待正是并行编排最大的时间成本。
+
 ### 合并
 
-由维护者合并，用 **squash merge**：一个 PR 在 `main` 上留一个提交，
-commit message 用 PR 标题（所以标题必须是合规的 Conventional Commits —— 它会直接进
-`CHANGELOG.md`）。合并后删掉远端分支。
+由维护者合并。**默认用 merge commit（不 squash）**，合并后删掉远端分支。
+
+> ⚠️ **2026-08-19 从 squash-only 改过来**。改的理由是 AI 开发：
+> agent 的中间提交是 `git bisect` 的唯一依据，也是 review 时看清「它是怎么一步步
+> 走到这个结果」的唯一途径。squash 之后这些全部消失。
+> `squash` 仍然允许（ruleset `allowed_merge_methods: [merge, squash]`），
+> 单提交的小 PR 用哪个都行。
+
+两条配套约束，破了任何一条 `CHANGELOG.md` 就会出错：
+
+- **PR 标题必须是合规的 Conventional Commits** —— 仓库设置把
+  `merge_commit_title` 定为 `PR_TITLE`、`merge_commit_message` 定为 `PR_BODY`，
+  所以标题会直接成为 `main` 上那个 merge commit 的 subject 并进 `CHANGELOG.md`。
+  （默认值 `MERGE_MESSAGE` 会生成 `Merge pull request #N from ...`，不合规。）
+- **changelog 取数走 `--first-parent`**，不是 `--no-merges`。
+  常量在 `scripts/lib/changelog-git.ts` 的 `HISTORY_WALK_FLAG`，
+  反漂移断言在 `tests/website/changelog-integration.test.ts`。
+  改回 `--no-merges` 会同时丢掉 PR 标题、放出所有 `wip:` 中间提交，
+  而且**产物照样生成、站点照样构建，没有任何东西会红**。
+
+### 必需检查只有一个：`all-checks-passed`
+
+ruleset `protect-main` 只绑这**一个**汇聚检查（`ci.yml` 的 `all-checks-passed` job），
+它自己不跑任何测试，只把 `test` / `lint` 的结论收成一条。
+
+**为什么要这层间接**：原先绑的是 `test (ubuntu-latest)` / `test (macos-latest)` /
+`lint` 三个具体 job 名，于是分支保护与 workflow 内部结构耦合。已经因此踩过两次，
+两次都是「不报红只转圈」的形态（改分支名静默停 CI；stacked PR 改 base 后三个检查恒
+pending）。现在加 job 只改 `all-checks-passed` 的 `needs` 一行，不动 ruleset。
+
+⚠️ **加了新 job 一定要同步 `needs`** —— 漏了就是一个绕过分支保护的后门，
+而且 PR 页面一片绿。`tests/release-flow-contract.test.ts` 有一条断言机械地拦这个
+（`needs` 必须覆盖除自己以外的全部 job）。
+
+另外开了两个自动化，**目的是让人只需要 review**：
+
+- **auto-merge**：`gh pr merge <n> --auto --merge` 挂上之后，CI 绿了自动合，
+  不用盯着 CI 等。
+- **strict 必需检查**：分支必须与 `main` 最新才能合并，所以 CI 跑的是
+  「最新的 `main` + 你的改动」，而不是一个过期的 base。
+
+⚠️ **合并队列（merge queue）用不了**：GitHub 官方限制「仅**组织拥有**的公共仓库，
+或用 Enterprise Cloud 的组织的私有仓库」，本仓 owner 是个人账户（往 ruleset 加
+merge_queue 规则返回 `422 Invalid rule 'merge_queue'`，2026-08-19 实测）。
+
+⚠️ **strict 不等价于队列，别把它当替代品**：strict 保证你的 CI 跑在最新 main 上，
+但**两个 PR 都通过 strict 之后先后合入时，后合的那个的 CI 结论仍然是合并前的**
+（它跑的时候前一个还没进 main）。所以「各自绿、合起来红」这类语义冲突在本仓
+**没有合并前的机制对策**，只能靠合并后在 `main` 上跑一次门禁、必要时 revert。
+
+**这一条直接影响并行策略**：同时开多路时，如果几路在语义上有耦合（改同一个子系统的
+不同角落），把它们放到不同批次串行做，比并行更省——并行省下的等待，会被
+「合起来红 → 归因 → revert → 重做」吃掉。`ci.yml` 已预置 `merge_group` trigger，
+哪天仓库转到组织下，开队列只需在 ruleset 加一条规则。
+
+### 已按旧判据拆好的方案文档怎么办
+
+`docs-research/.../todo/` 下有三份方案是按旧判据（一个缺陷一个 PR）拆的。
+**不需要重写**，按新判据把 PR 合并成单元、并在 PR 总表上方标一句判据已变即可。
+`PRn` 编号要保留 —— 它是文档 ↔ `plans/` ↔ PR ↔ issue 四处唯一不变的 id。
 
 ---
 
@@ -213,13 +301,38 @@ bun run lint:boundary    # 包边界扫描，动了跨包导入必跑
 **五条都跑绿，CI 基本不会红。** 只跑前两条是不够的 —— lint job 是独立的，
 排版或跨包导入不合规照样拦。
 
+### 开发过程中用选择性测试，最后一次再跑全量
+
+改一个文件却等全量（实测 127.5s）是不划算的，所以日常迭代用：
+
+```bash
+bun run affected-tests       # 只打印判定与命令，不执行（先看一眼选了什么）
+bun run affected-tests:run   # 执行选出来的最小测试集
+```
+
+它按 diff 触及的路径选测（`packages/core/src/<domain>/` → `packages/core/tests/<domain>/`），
+实测 **0.19s–14.5s**。碰到 `bunfig.toml` / `package.json` / `Makefile` / `tests/build/`
+这类仓库级文件，或同时改 ≥3 个包，它会自动判定为全量 —— 不需要你记住这些例外。
+
+两条使用约定：
+
+- **提 PR 前仍要跑一次全量 `bun test`。** 选测是给开发过程用的，不替代提交前的完整验证；
+  它换来的「快」是以「本地覆盖面变窄」为代价的，补偿是 CI 在合并前跑全量。
+- **base 默认是 `origin/main`**，所以本地要先 `git fetch origin main`，
+  否则脚本会明确报错而不是猜一个 base（猜错会让选测范围静默变错）。
+
+⚠️ 有一个 bun 陷阱值得知道，因为它会让人误判选测「又慢又没省」：
+`bun test` 的位置参数是**完整路径子串匹配**，不是目录。`bun test tests/` 实测搜 692 个文件
+（匹配所有路径含 `tests/` 的），`bun test ./tests/` 才是 38 个。脚本输出的路径一律带 `./`，
+自己手敲时也要带。
+
 ### 另有两个 git hook 门禁（跑 `bun run install-hooks` 安装）
 
 它们**不在 CI 里**，只在本地拦，所以更容易忘记装：
 
 | hook | 门禁 |
 | --- | --- |
-| pre-commit | oxlint + oxfmt + `docs:gen-reference --check`（参考页反漂移） |
+| pre-commit | oxlint + oxfmt + `docs:gen-reference --check`（参考页反漂移）+ Agent Note 形态校验 |
 | pre-push | holdout 泄露检测、`holdout/real-tasks` 永封校验、website 站点构建（死链检测）、北极星生成块陈旧检测（30 天） |
 
 没装 hook 的话，参考页漂移和站点死链会一路带到 PR 里才被发现。
@@ -366,11 +479,42 @@ docs: 更新 AAA
 
 PR 要求：
 
-- **一个 PR 一件事**。混合改动 review 成本高，且出问题不好回滚。
-- 标题同样用 Conventional Commits 格式，控制在 70 字符内
-  （squash merge 后它就是 `main` 上的 commit message，会直接进 `CHANGELOG.md`）。
+- **一个 PR = 一个可独立上线 / 回滚 / 一次 review 完的单元**（三条测试见上文同名小节）。
+  混合无关改动 review 成本高、出问题不好回滚；拆得过碎则 PR 的固定成本吃掉收益。
+- 标题同样用 Conventional Commits 格式，控制在 70 字符内。
+  ⚠️ **它会直接成为 `main` 上那个 merge commit 的 subject 并进 `CHANGELOG.md`**
+  （仓库设置 `merge_commit_title: PR_TITLE`），格式不对就污染 changelog。
 - 正文说清三件事：改了什么、为什么这么改、怎么验证的（贴 `bun test` 与 `make build` 结果）。
 - 用 [PR 模板](./.github/pull_request_template.md)，它就是这三件事的清单。
+
+### 非平凡改动要在同一个 PR 内带一份 Agent Note
+
+> **非平凡改动必须在同一个 PR 内加或更新一份 `.agents/notes/` 下的 Agent Note。**
+> 平凡 = 纯机械/局部编辑，不改行为、契约、结构、流程、理由。
+
+一份 Note 回答三件事，和上面 PR 正文要求的三件事**是同一组问题**（所以不是额外负担，
+是把它落到一个能长期检索的位置）：**决定了什么 / 放弃了什么（以及为什么不选）/ 拿什么证明它生效了**。
+
+```
+.agents/notes/{proposed,implemented,rejected}/{feature,architecture,bug-fix,simplification,process,testing}/yyyy-mm-dd-标题.md
+```
+
+lifecycle 与 class 都是**闭集**，模板在 `.agents/notes/_template.md`，
+完整格式与理由在 `.agents/notes/README.md`。
+
+判断卡不住时问一句：**半年后有人问"当时为什么这么定"，答案在哪？**
+只在你脑子里 → 需要一份 Note；代码里一目了然（改拼写、提取变量）→ 不需要。
+
+三段里第三段最容易糊过去，也最重要：写**跑了什么命令、看到什么输出**，
+不写"机理上讲得通"。这条有教训 —— 目标指标改善 + 测试全绿 + 机理讲得通，
+三者同时成立时结论仍然可能是错的。
+
+`rejected/` 那一格别省。**否决论证是最贵的资产**：它防的是下一个人（或下一个 agent）
+重新提议同一件事，然后把整套论证重做一遍。
+
+门禁只查形态（`bun run verify:agent-note`，pre-commit 在 staged 含 `.agents/notes/**` 时触发）：
+路径、闭集、frontmatter 的 `Status` 与所在目录一致、三段都在且非空。
+**内容不查，"该写没写"也不拦** —— 那需要语义判断，交 review。
 
 ### issue 先行：什么时候需要
 
