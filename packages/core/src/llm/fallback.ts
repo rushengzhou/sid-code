@@ -271,7 +271,11 @@ export interface FallbackConfig {
   /** 不确定-2/3：单次 executeWithFallback 调用内"连接阶段 + 流式阶段"重试的共享总上界。
    *  防止两阶段各自独立计数叠加成退避风暴。默认由 network-profile 的 maxRetriesPerCall 注入。 */
   maxRetriesPerCall?: number;
-  /** 流式整体超时（毫秒，默认 5 分钟） */
+  /** 流式**无内容进展**超时（毫秒，默认 5 分钟）。
+   *
+   *  PR2 起谓词从"attempt 绝对计时"改为"距上次内容进展"：每收到一个业务内容事件
+   *  （`content_block_delta` / `content_block_start` / `message_delta`）就重排定时器。
+   *  改名成本大于收益，故沿用旧字段名，但**语义已变**——它不再是 attempt 的绝对上限。 */
   streamTimeoutMs?: number;
   /** 配置-1：退避基数（毫秒）。默认由 network-profile 的 retryBackoffBaseMs 注入 */
   retryBackoffBaseMs?: number;
@@ -739,6 +743,14 @@ export class ModelFallback {
     // ═══════════════════════════════════════════════════════════════
     // 流超时保护：AbortController 主动中断 HTTP 连接
     // ═══════════════════════════════════════════════════════════════
+    //
+    // PR2：本层谓词是「距上次**内容进展**多久」，不是「这次 attempt 跑了多久」。
+    //
+    // 改这个谓词的理由（实测，非推理）：GLM-5.3 长思考场景下模型持续吐
+    // reasoning_content，但旧实现的定时器只在 attempt 边界重排 → 一条**一直有进展**
+    // 的健康流被固定 300s 无差别掐断，已累积的思考内容全部作废、被迫从零重来。
+    // 上下文越大思考越慢 → 越容易触顶 → 恶性循环。轨迹实证：24 次 TimeoutFired
+    // 100% 是本层，`elapsed_ms` 全部精确落在 300000±300（绝对计时器的指纹）。
     const streamTimeoutMs = this.config.streamTimeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS;
     let streamTimeoutCtl = new AbortController();
     let streamTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -746,9 +758,19 @@ export class ModelFallback {
     // 若 5s 内 abort 未能中断已进入的 SSE 消费（parseSSE hang 场景）→ TimeoutIneffective。
     let disarmStreamIneffective: (() => void) | null = null;
 
+    const clearStreamTimeout = () => {
+      if (streamTimeoutId !== null) {
+        clearTimeout(streamTimeoutId);
+        streamTimeoutId = null;
+      }
+      // 缺口 2 进阶：旧超时窗口作废 → disarm 其未生效检查（避免误报）。
+      (disarmStreamIneffective as (() => void) | null)?.();
+      disarmStreamIneffective = null;
+    };
+
     const startStreamTimeout = () => {
       streamTimeoutId = setTimeout(() => {
-        log.warn("FALLBACK", `流式整体超时: ${streamTimeoutMs / 1000}s，主动中断连接`);
+        log.warn("FALLBACK", `流式无进展超时: ${streamTimeoutMs / 1000}s，主动中断连接`);
         // 缺口 2：记录 fallback 流式整体超时触发
         // B4：带 agentId —— 漏斗这层用的是 ambient `turnIndex`（主循环轮次），子代理调用
         // 也会拿到同一个 turnIndex。不带身份时，子代理的 fallback 超时会被写进**主循环那份
@@ -772,21 +794,56 @@ export class ModelFallback {
       }, streamTimeoutMs);
       // 不调 unref()：fdb47f30 教训——index 23 请求发出后 hang 死,若定时器被 unref,
       // 在事件循环空闲时 Node/Bun 不保证它按时 fire,整体超时形同虚设、无法自愈。
-      // 这里是"受管理的非 unref 定时器"：resetStreamTimeout / 正常收尾路径都会 clearTimeout,
+      // 这里是"受管理的非 unref 定时器"：renewStreamTimeout / 正常收尾路径都会 clearTimeout,
       // 不会泄漏阻止进程退出。宁可让它确实持有事件循环,也要保证超时一定触发。
     };
 
+    /**
+     * **续命**：内容进展到达时只重排定时器，**复用同一个 `streamTimeoutCtl`**。
+     *
+     * ⛔ 这里绝对不能 `new AbortController()`（PR2 的核心约束，破了比不改更糟）：
+     * `makeCombinedSignal()` 只在 `openStream` 时**取一次** signal，在飞的 fetch 持有的
+     * 是**旧** controller 的 signal。attempt 中途换 controller → 新 controller 的
+     * `abort()` 到不了那个 fetch、旧 timer 又已被 clear → **这一层超时被彻底解除**，
+     * 真半开连接再也没人回收（退回 0 层状态，比 300s 误杀更坏）。
+     * 负向对照测试：`fallback-content-progress-timeout.test.ts` 的
+     * 「续命不得重建 AbortController」用例钉住这一点。
+     */
+    const renewStreamTimeout = () => {
+      clearStreamTimeout();
+      startStreamTimeout();
+    };
+
+    /**
+     * **换 controller**：只在真正重开流（attempt 边界）时做。
+     *
+     * 此处换是安全的：紧随其后就会 `makeCombinedSignal()` 重新取 signal 交给新的
+     * `openStream`，新旧 controller 与各自的 fetch 一一对应。
+     */
     const resetStreamTimeout = () => {
-      if (streamTimeoutId !== null) {
-        clearTimeout(streamTimeoutId);
-        streamTimeoutId = null;
-      }
-      // 缺口 2 进阶：旧超时窗口作废 → disarm 其未生效检查（避免误报）。
-      (disarmStreamIneffective as (() => void) | null)?.();
-      disarmStreamIneffective = null;
+      clearStreamTimeout();
       streamTimeoutCtl = new AbortController();
       startStreamTimeout();
     };
+
+    /**
+     * 「这个事件算不算内容进展」——与 lifecycle 层 `isContentProgress` 同族判据。
+     *
+     * 取并集而非某一条 provider 的定义：本层是**所有** provider 的公共漏斗，
+     * 而各 provider 的 `isContentProgress` 口径不同（anthropic 认
+     * `content_block_delta` + `message_delta`，Responses 只认 `content_block_delta`）。
+     * 这里取窄了会误杀该 provider 的健康流 —— 本层的职责是兜底回收僵死连接，
+     * 判宽一点的代价是"僵死回收慢一档"，判窄的代价是"健康流被杀"，两者不对等。
+     *
+     * `content_block_start` 也算：与下方 `hasYieldedContent` 的 B2 判据保持一致
+     * （无参数工具调用整条流只有 start + stop，零 delta，但它确实是真实进展）。
+     * ping / keep-alive 注释行不算进展 —— 它们在 provider 层就不会转成 StreamEvent，
+     * 那一层由 parseSSE 的字节级 idle 闸门负责（谓词不同、职责不同，见 §2.3.3）。
+     */
+    const isStreamContentProgress = (event: StreamEvent): boolean =>
+      event.type === "content_block_delta" ||
+      event.type === "content_block_start" ||
+      event.type === "message_delta";
 
     const makeCombinedSignal = (): AbortSignal => {
       if (signal && !signal.aborted) {
@@ -847,6 +904,40 @@ export class ModelFallback {
     // 流式消费（唯一的重试点）
     // ═══════════════════════════════════════════════════════════════
     let hasYieldedContent = false;
+    /**
+     * PR6：本次 attempt **已产出多少内容** —— 重试决策的输入，不只是一个"空不空"的 bool。
+     *
+     * ## 为什么 `hasYieldedContent` 一个 bool 不够
+     *
+     * 它当前的唯一用途是空响应校验（下方 `if (!hasYieldedContent) throw 响应为空`），
+     * **不参与任何重试决策**。于是本层的默认行为是：超时切断一条已经吐了两万字思考的流，
+     * 睡个退避，重开一个全新请求，从零再想一遍 —— 而这一层**看不见它扔掉了什么**，
+     * 所以"丢弃"既是它的默认行为，也**不可能被它自己发现**。
+     * 这正是本文档标题「丢弃已累积内容」的结构性根因。
+     *
+     * ## 为什么记在这一层，而不是只靠消费方的 `stream_restart` 统计
+     *
+     * 实测（会话 `20260817-135824-fcf863e1`）：24 次超时重开，消费方只留下 **2** 条记录。
+     * 原因不是漏记，是**竞态** —— 本层要先睡 4.3~5.7s 退避才 `yield stream_restart`，
+     * 而 `loop.ts` 的 watchdog 在 56~163ms 内就把这个生成器杀掉了，那句作废广播
+     * **根本没机会执行**。所以「消费方视角的丢弃量」结构性地只能看到 8%。
+     *
+     * 本计数器记在**退避之前**（与 `retry` 遥测同一位置，实测 24/24 全部落盘），
+     * 与消费方的 `StreamRestart` 事件是**两个视角、互为对照**：
+     * 两者数量对不上，差额就是被 watchdog 抢先杀掉的那些。
+     */
+    const produced = { chars: 0, thinkingChars: 0, thinkingIdx: new Set<number>() };
+    /**
+     * 三个"本次 attempt 的产出状态"必须同生同灭。
+     * 分开重置迟早漏一个 —— 而漏掉的那个会让下一次 attempt 带着上一次的计数，
+     * 是最难查的那种脏数据（本仓「手写清单必漂移」的同型）。
+     */
+    const resetAttemptProduction = (): void => {
+      hasYieldedContent = false;
+      produced.chars = 0;
+      produced.thinkingChars = 0;
+      produced.thinkingIdx.clear();
+    };
     const streamMaxRetries = perCall.maxRetries ?? STREAM_RETRY.maxRetries;
 
     try {
@@ -1057,6 +1148,33 @@ export class ModelFallback {
               hasYieldedContent = true;
             }
 
+            // PR6：在同一处把"产出了多少"也记下来。与上面那个 bool 共用判据、共用重置
+            // （`resetAttemptProduction`），避免两套语义各自漂移。
+            //
+            // 思考块的识别：GLM/DeepSeek 的 `reasoning_content` 在 `openai.ts` 里被转成
+            // `content_block_start{type:"text", _raw_block:{type:"thinking"}}` + text_delta，
+            // 只有 `content_block_stop` 到达后才会被消费方就地转型成 thinking 块 ——
+            // 而流被掐死在思考中途时那个 stop 永远不会来。所以必须在 start 事件上就记住
+            // 「这个 index 是思考」，否则本层永远报不出"丢掉的是思考内容"。
+            if (event.type === "content_block_start") {
+              const rawBlock = (event as { _raw_block?: { type?: string } })._raw_block;
+              if (rawBlock?.type === "thinking" || event.content_block.type === "thinking") {
+                produced.thinkingIdx.add(event.index);
+              }
+            } else if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+              produced.chars += event.delta.text.length;
+              if (produced.thinkingIdx.has(event.index)) {
+                produced.thinkingChars += event.delta.text.length;
+              }
+            }
+
+            // PR2：内容进展 → 续命本层定时器（**只重排，不换 controller**，理由见
+            // `renewStreamTimeout` 的注释）。放在 `yield event` 之前是刻意的：
+            // yield 会把控制权交给消费方，消费方可能慢（渲染/落盘），续命不该等它。
+            if (isStreamContentProgress(event)) {
+              renewStreamTimeout();
+            }
+
             yield event;
           }
 
@@ -1153,7 +1271,7 @@ export class ModelFallback {
                 ? { ...params, maxTokens: ctx.maxTokensOverride }
                 : params;
               stream = primaryProvider.sendMessageStream(retryParams, makeCombinedSignal());
-              hasYieldedContent = false;
+              resetAttemptProduction();
               // 不消耗 attempt 预算：retry-once 闸门自带"只一次"上界（needsAuthRefresh
               // 已置位），且不退避——与 CC withRetry 的 401 刷新重试同语义。
               attempt--;
@@ -1193,7 +1311,10 @@ export class ModelFallback {
           }
 
           const classified = isTimeoutAbort
-            ? new RetryableError(`流式整体超时（${streamTimeoutMs / 1000}s 无数据）`, "timeout")
+            ? new RetryableError(
+                `流式无进展超时（${streamTimeoutMs / 1000}s 无内容进展）`,
+                "timeout",
+              )
             : classifyError(err);
 
           // S5 释放点之二（连接/流异常抛出路径）。见 maybeReleaseCooldownProbe 注释。
@@ -1461,9 +1582,32 @@ export class ModelFallback {
               error: classified.message,
               phase: "stream",
               reopenReason,
+              // PR6：把"这次重开扔掉了多少已产出内容"钉进同一条遥测。
+              // 放这里而不是放在下面 `yield stream_restart` 旁边，是因为**那行常常执行不到**：
+              // watchdog 会在退避睡眠期间（56~163ms vs 4.3~5.7s）把生成器杀掉。
+              // 这一条在退避**之前**发，实测 24/24 全部落盘。
+              discardedChars: produced.chars,
+              discardedThinkingChars: produced.thinkingChars,
             },
             perCall.agentId,
           );
+
+          // PR6：重试决策**读到**"上一次 attempt 已经产出了多少"这个事实。
+          //
+          // 现状是照旧重试（不改重试策略——那是行为变更，需单独讨论），
+          // 但代价从此是**显式的、可检索的**，而不是像改造前那样连本层自己都不知道。
+          // 这是 Reasonix `retry.go:277`「once the body streams, mid-stream failures are
+          // not retried」那套裁决的前置条件：先让这一层看得见，才谈得上让它做选择。
+          //
+          // ⚠ 零产出的 attempt 一个字都不打印，也照常重试 —— 别把重试关死。
+          if (produced.chars > 0) {
+            log.warn(
+              "FALLBACK",
+              `重开将丢弃本次尝试已产出的 ${produced.chars} 字符` +
+                (produced.thinkingChars > 0 ? `（其中思考 ${produced.thinkingChars} 字符）` : "") +
+                `，模型需从零重新生成（原因=${reopenReason}）`,
+            );
+          }
 
           // S2：睡 `effectiveDelayMs`（已向共享冷却对齐），不是原始 delayMs。
           // 这一行是 S2 从"写了个字段"变成"真的少发一发请求"的落点。
@@ -1507,17 +1651,11 @@ export class ModelFallback {
             signal,
           );
           // 清空内容标志（新流需要重新检测）
-          hasYieldedContent = false;
+          resetAttemptProduction();
         }
       }
     } finally {
-      if (streamTimeoutId !== null) {
-        clearTimeout(streamTimeoutId);
-        streamTimeoutId = null;
-      }
-      // 缺口 2 进阶：流式阶段收尾（正常/异常/fallback）→ disarm 未生效检查兜底。
-      (disarmStreamIneffective as (() => void) | null)?.();
-      disarmStreamIneffective = null;
+      clearStreamTimeout();
     }
 
     // ═══════════════════════════════════════════════════════════════
