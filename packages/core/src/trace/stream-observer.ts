@@ -96,9 +96,72 @@ let _sessionId: string = "";
 let _eventWriter: EventWriter | null = null;
 const _snapshots = new Map<string, StreamSnapshot>();
 
+/**
+ * 每个 (loopId, index, agentId) 的重试序号状态（P2 · `(session,index)` 非唯一键）。
+ *
+ * ## 为什么必须与 `_snapshots` 分开存
+ *
+ * 这是本实现唯一的要害。快照在**每次重试前**被 `clearStreamSnapshot` 主动清掉
+ * （`query/loop.ts:2588`、`agent/agentic-loop.ts:504` 等，理由见那里：防止看门狗读到
+ * 上一次失败的脏 `lastContentProgressAt` 立即误杀）。若把 attempt 计数放进快照，
+ * 它会**跟着一起归零**——于是 fallback 内部重试记到 1、2、3，主循环重试一发生就
+ * 又从 1 开始。同一个 (session,index) 下出现两个 `attempt=1`，
+ * **键仍然不唯一，但它现在看起来像唯一的**，比没有这个字段更糟。
+ *
+ * 所以这张表**刻意不被 `clearStreamSnapshot` 清理**，只在 loop / agent 整体收尾时清
+ * （`clearAllSnapshots` / `cleanupAgentSnapshots` / `resetStreamObserver`）——
+ * 与"一个 index 的生命周期"对齐，而不是与"一次 fetch 的生命周期"对齐。
+ *
+ * `sawHeaders` 用于 anthropic 路径：它**不发 `fetch_sent`**（全仓仅
+ * `headers_received` 与 `first_content` 两个 emit 点），没有这个标志就无法识别
+ * "又一次 fetch 开始了"，attempt 会永远停在 1。
+ */
+interface AttemptState {
+  /** 当前 attempt 序号，**1-based**（0 表示尚未观测到任何开场 phase） */
+  attempt: number;
+  /** 当前 attempt 内是否已见过 headers_received（anthropic 无 fetch_sent 时的换代依据） */
+  sawHeaders: boolean;
+}
+const _attempts = new Map<string, AttemptState>();
+
+/**
+ * 推进并返回本次事件所属的 attempt 序号。
+ *
+ * 换代规则（对两族 provider 都成立，且**只依赖已有的 phase 序列**，不需要 provider
+ * 透传任何东西——`fallback.ts` 的重试循环根本没把 attempt 传给 provider，
+ * `openStream()` 的签名里没有这个参数）：
+ *
+ * - `fetch_sent` —— 必然是一次新 fetch，直接进位（openai 两条路径）。
+ * - `headers_received` —— 本代已经见过 headers 时进位（anthropic 路径的换代信号）；
+ *   否则沿用当前代（openai 的 fetch_sent → headers 属同一代）。
+ * - 其余 phase（sse_consuming / first_content / completed / aborted / error）
+ *   **只读不进位**，它们描述的是当前这次 fetch 的后续阶段。
+ *
+ * 首个事件若不是开场 phase（老轨迹、emit 失败漏了开场），归入 attempt=1 而不是 0：
+ * 0 会被读成"第 0 次尝试"，而事实是"至少发生过一次尝试，只是没观测到开场"。
+ */
+function nextAttempt(key: string, phase: StreamPhase): number {
+  let st = _attempts.get(key);
+  if (!st) {
+    st = { attempt: 0, sawHeaders: false };
+    _attempts.set(key, st);
+  }
+  if (phase === "fetch_sent") {
+    st.attempt++;
+    st.sawHeaders = false;
+  } else if (phase === "headers_received") {
+    if (st.sawHeaders || st.attempt === 0) st.attempt++;
+    st.sawHeaders = true;
+  } else if (st.attempt === 0) {
+    st.attempt = 1;
+  }
+  return st.attempt;
+}
+
 // ─── Snapshot Key 管理（Fix 1：namespace 隔离）───
 
 import { currentSseDumpContext } from "../llm/sse-chunk-dumper.ts";
+import { recordTtftHistogram } from "../telemetry/metrics/latency-histograms.ts";
 
 /**
  * 构造复合 key：`${loopId}:${index}`，带 agentId 时为 `${loopId}:${agentId}:${index}`。
@@ -134,6 +197,7 @@ export function initStreamObserver(
   _sessionId = sessionId;
   _eventWriter = eventWriter;
   _snapshots.clear();
+  _attempts.clear();
 }
 
 /**
@@ -143,6 +207,7 @@ export function resetStreamObserver(): void {
   _sessionId = "";
   _eventWriter = null;
   _snapshots.clear();
+  _attempts.clear();
 }
 
 // ─── StreamPhase 事件（缺口 1+6） ───
@@ -195,13 +260,39 @@ export function emitStreamPhase(
     // 写入 events.jsonl
     // B4：agentId 一并落轨迹（仅在有值时加字段，主循环事件形状逐字节不变），
     // 让离线分析能把 StreamPhase 归到具体子代理，而不是只看到一堆同 index 的事件。
+    //
+    // P2（attempt）：重试序号由本模块按 phase 序列自行推导后注入。
+    // `...extra` 放在 attempt **之后**，是为了让调用方显式传入的 attempt 覆盖推导值——
+    // `agent/agentic-loop.ts` 的 5 个 emit 点已经在传 attempt（取自 `onRetry` 回调，
+    // 其源头是 `fallback.ts:1428` 的 `attempt + 1`，与本模块推导的是同一个计数），
+    // 那边拿得到权威值，这边只是兜底。两者语义一致，不是两套口径。
     if (_eventWriter && _sessionId) {
+      const attempt = nextAttempt(key, phase);
       _eventWriter({
         event: "StreamPhase",
         session_id: _sessionId,
         timestamp: new Date().toISOString(),
-        data: agentId ? { index, phase, agent_id: agentId, ...extra } : { index, phase, ...extra },
+        data: agentId
+          ? { index, phase, agent_id: agentId, attempt, ...extra }
+          : { index, phase, attempt, ...extra },
       });
+    }
+
+    // P1（TTFT Histogram）：first_content 是三条 provider 路径（anthropic /
+    // Chat Completions / Responses）**唯一的汇聚点** —— T14.6 把 first_content 的
+    // emit 收敛到 lifecycle 层，正是为了这种"一个插入点覆盖全部路径"。
+    // 在各 provider 里分别记会变成三份互相漂移的口径。
+    //
+    // 放在事件写入之外、且不受 `_eventWriter` 约束：metric 与 events.jsonl 是两条
+    // 独立通道，轨迹没开时 metric 仍应该有（反之亦然）。
+    if (phase === "first_content") {
+      const ttft = extra?.ttft_ms;
+      const model = extra?.model;
+      if (typeof ttft === "number" && typeof model === "string") {
+        recordTtftHistogram(ttft, model, {
+          cacheHit: typeof extra?.cache_hit === "boolean" ? extra.cache_hit : undefined,
+        });
+      }
     }
   } catch {
     /* 可观测性不影响正常流程 */
@@ -367,6 +458,61 @@ export function emitTimeoutRetry(data: {
   }
 }
 
+// ─── StreamRestart 事件（PR4：内容丢弃的唯一度量口径） ───
+
+/**
+ * 记录一次流重开（`stream_restart`）作废掉多少已产出内容。
+ *
+ * ## 为什么必须是**结构化事件**，而不是继续用那条 `log.warn`
+ *
+ * 改造前唯一的留痕是 `stream-processor.ts` 的一行 `log.warn`，且**带条件**
+ * （`discardedBlocks > 0 || discardedTextLength > 0`）。两个后果：
+ *
+ * 1. **没有分母**。零产出的重开一行不记，于是「一共重开了几次」「其中几次真丢了东西」
+ *    都算不出来。本仓铁律：**分母比分子重要** —— 只有分子时，分子变小既可能是
+ *    "丢得少了"，也可能是"重开得少了"，两者修法完全不同。
+ * 2. **离线分析拿不到**。`warn.log` 是非结构化文本，`events.jsonl` 里一个字都没有，
+ *    所以任何基于轨迹的复算（§6.3 的收尾验收）都只能靠 grep 日志行数，
+ *    而那个数字**系统性偏小**（实测一次会话 23 次重开只留 2 行）。
+ *
+ * 本事件**无条件发**（含零丢弃的重开），分母由此成立。日志那行仍然保持有条件 ——
+ * 零丢弃的重开不是"警告"，把它也打成 warn 只会淹掉真正有损失的那几条。
+ *
+ * ## 与 `TimeoutFired` 的分工
+ *
+ * `TimeoutFired` 回答"哪一层闸门开了枪"，本事件回答"那一枪打掉了多少内容"。
+ * 两者按 `index` + 时间戳可以拼起来，正是 §6.3 要求的
+ * 「用新口径确认内容丢弃真的减少」的取数源。
+ */
+export function emitStreamRestart(data: {
+  reason: string;
+  attempt?: number;
+  /** 作废的内容块数 */
+  discarded_blocks: number;
+  /** 作废的字符总数（可见文本 + 思考文本，与旧 `discardedTextLength` 同口径） */
+  discarded_chars: number;
+  /** 其中属于**思考**的字符数（`discarded_chars` 的子集） */
+  discarded_thinking_chars: number;
+  /** 被截断的工具入参 JSON 字符数 —— 改造前完全不可观测 */
+  discarded_tool_json_chars: number;
+  /** 哪个消费者（主循环 / 子代理 / forked / 无头），四条路径各自累加、口径可能不同 */
+  consumer: string;
+}): void {
+  try {
+    if (_eventWriter && _sessionId) {
+      const { turnIndex, loopId } = currentSseDumpContext();
+      _eventWriter({
+        event: "StreamRestart",
+        session_id: _sessionId,
+        timestamp: new Date().toISOString(),
+        data: { index: turnIndex, loop_id: loopId, ...data } as unknown as Record<string, unknown>,
+      });
+    }
+  } catch {
+    /* 可观测性不影响正常流程 */
+  }
+}
+
 /**
  * 记录超时重试耗尽事件。
  */
@@ -500,6 +646,13 @@ export function getActiveStreamSnapshots(): StreamSnapshot[] {
 /**
  * 清除指定 index 的快照（AfterModel 正常完成后 / 看门狗启动前 / 重试前）。
  * loopId 可选——不传时使用当前 ambient context 的 loopId。
+ *
+ * ⚠️ **刻意不清 `_attempts`**（这不是遗漏，改动前请读 `_attempts` 的注释）：
+ * 本函数的主要调用时机之一就是"重试前"，而 attempt 的全部意义正是**跨重试**
+ * 区分这几次 fetch。在这里一并清掉，等于每次重试后序号都重置回 1，
+ * 同一个 (session,index) 下会出现多个 `attempt=1` —— 那比没有这个字段更糟，
+ * 因为它看起来像个唯一键。attempt 表按 loop / agent 收尾清理，见
+ * {@link clearAllSnapshots} 与 {@link cleanupAgentSnapshots}。
  */
 export function clearStreamSnapshot(index: number, loopId?: string, agentId?: string): void {
   const effectiveLoopId = loopId ?? currentSseDumpContext().loopId;
@@ -517,6 +670,13 @@ export function clearAllSnapshots(loopId: string): void {
   for (const key of _snapshots.keys()) {
     if (key.startsWith(`${loopId}:`)) {
       _snapshots.delete(key);
+    }
+  }
+  // attempt 计数与快照分开存（见 `_attempts` 注释），但**生命周期在这里对齐**：
+  // queryLoop 结束即整轮结束，留着会让下一个 loop 复用同 index 时从旧序号续起。
+  for (const key of _attempts.keys()) {
+    if (key.startsWith(`${loopId}:`)) {
+      _attempts.delete(key);
     }
   }
 }
@@ -540,6 +700,13 @@ export function cleanupAgentSnapshots(agentId: string): void {
   for (const key of _snapshots.keys()) {
     if (key.includes(marker)) {
       _snapshots.delete(key);
+    }
+  }
+  // 同 clearAllSnapshots：attempt 表随子代理一起收尾，否则同一 agentId 复用时
+  // （子代理可跨多轮）序号会从上次的尾巴续起。
+  for (const key of _attempts.keys()) {
+    if (key.includes(marker)) {
+      _attempts.delete(key);
     }
   }
 }
