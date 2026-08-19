@@ -258,13 +258,22 @@ pending）。现在加 job 只改 `all-checks-passed` 的 `needs` 一行，不�
 
 - **auto-merge**：`gh pr merge <n> --auto --merge` 挂上之后，CI 绿了自动合，
   不用盯着 CI 等。
-- **strict 必需检查**：分支必须与 `main` 最新才能合并，保证 CI 跑的是合并后的内容。
+- **strict 必需检查**：分支必须与 `main` 最新才能合并，所以 CI 跑的是
+  「最新的 `main` + 你的改动」，而不是一个过期的 base。
 
-⚠️ **合并队列（merge queue）用不了**：GitHub 官方限制「仅组织拥有的公共仓库，
-或用 Enterprise Cloud 的组织的私有仓库」，本仓 owner 是个人账户（REST API 返回
-422 `Invalid rule 'merge_queue'`）。所以「各自绿、合起来红」这类语义冲突**没有
-合并前的机制对策**，只能靠上面的 strict 策略 + 合并后在 `main` 上跑一次门禁。
-并行开多路时这一点要记着。
+⚠️ **合并队列（merge queue）用不了**：GitHub 官方限制「仅**组织拥有**的公共仓库，
+或用 Enterprise Cloud 的组织的私有仓库」，本仓 owner 是个人账户（往 ruleset 加
+merge_queue 规则返回 `422 Invalid rule 'merge_queue'`，2026-08-19 实测）。
+
+⚠️ **strict 不等价于队列，别把它当替代品**：strict 保证你的 CI 跑在最新 main 上，
+但**两个 PR 都通过 strict 之后先后合入时，后合的那个的 CI 结论仍然是合并前的**
+（它跑的时候前一个还没进 main）。所以「各自绿、合起来红」这类语义冲突在本仓
+**没有合并前的机制对策**，只能靠合并后在 `main` 上跑一次门禁、必要时 revert。
+
+**这一条直接影响并行策略**：同时开多路时，如果几路在语义上有耦合（改同一个子系统的
+不同角落），把它们放到不同批次串行做，比并行更省——并行省下的等待，会被
+「合起来红 → 归因 → revert → 重做」吃掉。`ci.yml` 已预置 `merge_group` trigger，
+哪天仓库转到组织下，开队列只需在 ruleset 加一条规则。
 
 ### 已按旧判据拆好的方案文档怎么办
 
@@ -291,6 +300,31 @@ bun run lint:boundary    # 包边界扫描，动了跨包导入必跑
 
 **五条都跑绿，CI 基本不会红。** 只跑前两条是不够的 —— lint job 是独立的，
 排版或跨包导入不合规照样拦。
+
+### 开发过程中用选择性测试，最后一次再跑全量
+
+改一个文件却等全量（实测 127.5s）是不划算的，所以日常迭代用：
+
+```bash
+bun run affected-tests       # 只打印判定与命令，不执行（先看一眼选了什么）
+bun run affected-tests:run   # 执行选出来的最小测试集
+```
+
+它按 diff 触及的路径选测（`packages/core/src/<domain>/` → `packages/core/tests/<domain>/`），
+实测 **0.19s–14.5s**。碰到 `bunfig.toml` / `package.json` / `Makefile` / `tests/build/`
+这类仓库级文件，或同时改 ≥3 个包，它会自动判定为全量 —— 不需要你记住这些例外。
+
+两条使用约定：
+
+- **提 PR 前仍要跑一次全量 `bun test`。** 选测是给开发过程用的，不替代提交前的完整验证；
+  它换来的「快」是以「本地覆盖面变窄」为代价的，补偿是 CI 在合并前跑全量。
+- **base 默认是 `origin/main`**，所以本地要先 `git fetch origin main`，
+  否则脚本会明确报错而不是猜一个 base（猜错会让选测范围静默变错）。
+
+⚠️ 有一个 bun 陷阱值得知道，因为它会让人误判选测「又慢又没省」：
+`bun test` 的位置参数是**完整路径子串匹配**，不是目录。`bun test tests/` 实测搜 692 个文件
+（匹配所有路径含 `tests/` 的），`bun test ./tests/` 才是 38 个。脚本输出的路径一律带 `./`，
+自己手敲时也要带。
 
 ### 另有两个 git hook 门禁（跑 `bun run install-hooks` 安装）
 
