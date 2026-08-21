@@ -100,7 +100,7 @@
     "scheduler": "0.27.0"
   },
   "devDependencies": {
-    "@oxlint/binding-darwin-arm64": "1.77.0",
+    "@oxlint/binding-darwin-arm64": "1.78.0",
     "@oxlint/binding-darwin-x64": "1.77.0",
     "@oxlint/binding-linux-arm64-gnu": "1.77.0",
     "@oxlint/binding-linux-x64-gnu": "1.77.0",
